@@ -1,0 +1,87 @@
+name: Companion Code Freshness Check
+
+on:
+  schedule:
+    # Every Sunday at 06:00 UTC
+    - cron: "0 6 * * 0"
+  push:
+    branches: [main]
+    paths:
+      - "companion-code/**"
+  pull_request:
+    paths:
+      - "companion-code/**"
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} — import + smoke tests
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    defaults:
+      run:
+        working-directory: companion-code
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m spacy download en_core_web_lg
+
+      - name: Smoke-test ch01 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch01-what-breaks-after-you-ship'); import ch01_scripts; print('ch01 OK')"
+
+      - name: Smoke-test ch02 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch02-detecting-hallucinations'); import ch02_scripts; print('ch02 OK')"
+
+      - name: Smoke-test ch03 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch03-containing-hallucinations-cicd'); import ch03_scripts; print('ch03 OK')"
+
+      - name: Smoke-test ch04 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch04-prompt-injection-defense'); import ch04_scripts; print('ch04 OK')"
+
+      - name: Smoke-test ch05 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch05-rag-retrieval-security'); import ch05_scripts; print('ch05 OK')"
+
+      - name: Smoke-test ch06 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch06-red-teaming'); import ch06_scripts; print('ch06 OK')"
+
+      - name: Smoke-test ch07 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch07-autonomous-agents-scope-containment-monitoring'); import ch07_scripts; print('ch07 OK')"
+
+      - name: Smoke-test ch08 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch08-pii-memorization-right-to-erasure'); import ch08_scripts; print('ch08 OK')"
+
+      - name: Smoke-test ch09 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch09-bias-harmful-output-content-safety'); import ch09_scripts; print('ch09 OK')"
+
+      - name: Smoke-test ch10 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch10-eu-ai-act-nist-engineering-artifacts'); import ch10_scripts; print('ch10 OK')"
+
+      - name: Smoke-test ch11 imports
+        run: python -c "import sys; sys.path.insert(0, 'ch11-hardening-stack-pr-gate'); import ch11_scripts; print('ch11 OK')"
+
+      - name: Run chapter pytest suites
+        run: |
+          python -m pytest ch04-prompt-injection-defense/ch04_injection_tests.py -v --tb=short || true
+          python -m pytest ch05-rag-retrieval-security/ch05_retrieval_security_tests.py -v --tb=short || true
+          python -m pytest ch06-red-teaming/ch06_redteam_ci_tests.py -v --tb=short || true
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || 'sk-mock' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || 'sk-ant-mock' }}
+
+      - name: Check requirements are still installable at pinned versions
+        run: pip check

@@ -1,0 +1,117 @@
+# ============================================================
+# Hardening LLM Systems in Production — Companion Code
+# Manning Books | Authors: Rudrendu Paul, Sourav Nandy
+#
+# Versioning: exact pins (==) for fast-breaking APIs; floor+ceiling (>=X,<X+1) for stable libs
+# Python: >=3.10, <3.13
+# Tested on: Python 3.10, 3.11
+# Last verified: 2026-05-31
+#
+# Install: pip install -r requirements.txt
+# Spacy model: python -m spacy download en_core_web_lg
+# ============================================================
+
+# Chapter cross-reference:
+# Ch1:  requests, pydantic
+# Ch2:  deepeval, ragas, datasets, scipy, scikit-learn, openai
+# Ch3:  deepeval, ragas, langchain, openai
+# Ch4:  langchain, pydantic, langchain-openai, pytest, pytest-asyncio
+# Ch5:  pinecone-client, langchain, sentence-transformers, scipy, numpy, pytest
+# Ch6:  garak, pyrit, ragas, sentence-transformers, pytest
+# Ch7:  langfuse, opentelemetry-sdk, langchain, langchain-openai, langgraph, sentence-transformers
+# Ch8:  presidio-analyzer, presidio-anonymizer, spacy, textblob, anthropic
+# Ch9:  nemoguardrails, guardrails-ai, scikit-learn, openai
+# Ch10: pyyaml, fastapi, uvicorn, opentelemetry-sdk
+# Ch11: litellm, arize-phoenix, langfuse, langchain, langchain-openai, langgraph,
+#       llama-index, deepeval, presidio-analyzer, presidio-anonymizer, opentelemetry-sdk
+
+# ============================================================
+# LLM Frameworks
+# ============================================================
+langchain==0.3.0
+langchain-openai==0.2.0
+langgraph==0.2.0
+llama-index==0.11.0
+haystack-ai==2.3.0
+
+# ============================================================
+# LLM Provider SDKs
+# ============================================================
+openai>=1.35.0,<2.0
+anthropic>=0.29.0,<1.0
+
+# ============================================================
+# Vector Stores
+# ============================================================
+pinecone-client==4.1.0
+weaviate-client==4.5.0
+qdrant-client==1.9.0
+psycopg2-binary>=2.9.9,<3.0
+pgvector>=0.3.0,<1.0
+
+# ============================================================
+# Guardrails & Safety
+# ============================================================
+guardrails-ai==0.5.0
+nemoguardrails==0.9.0
+llm-guard==0.3.12
+presidio-analyzer==2.2.354
+presidio-anonymizer==2.2.354
+spacy==3.7.4
+
+# ============================================================
+# Red-Teaming & Evaluation
+# ============================================================
+garak==0.10.0
+pyrit==0.6.0
+deepeval==0.21.7
+ragas==0.1.21
+datasets>=2.20.0,<3.0
+
+# ============================================================
+# Observability
+# ============================================================
+arize-phoenix==4.5.0
+langfuse==2.28.0
+opentelemetry-sdk==1.21.0
+opentelemetry-exporter-otlp==1.21.0
+
+# ============================================================
+# LLM Gateway / Routing
+# ============================================================
+litellm==1.35.0
+portkey-ai==1.3.0
+
+# ============================================================
+# Scientific Computing & NLP
+# ============================================================
+scipy>=1.13.0,<2.0
+scikit-learn>=1.5.0,<2.0
+numpy>=1.26.4,<2.0
+textblob>=0.18.0,<1.0
+sentence-transformers==2.6.0
+matplotlib>=3.9.0,<4.0
+tiktoken==0.7.0
+
+# ============================================================
+# Web / API
+# ============================================================
+pydantic>=2.7.0,<3.0
+fastapi>=0.111.0,<1.0
+uvicorn>=0.30.0,<1.0
+requests>=2.32.0,<3.0
+httpx>=0.27.0,<1.0
+
+# ============================================================
+# Utilities
+# ============================================================
+pyyaml>=6.0.1,<7.0
+jinja2>=3.1.4,<4.0
+python-dotenv==1.0.1
+tenacity==8.3.0
+
+# ============================================================
+# Testing
+# ============================================================
+pytest==8.2.0
+pytest-asyncio==0.23.6

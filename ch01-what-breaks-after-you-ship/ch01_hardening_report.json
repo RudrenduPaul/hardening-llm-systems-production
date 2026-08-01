@@ -1,0 +1,98 @@
+{
+  "system_name": "Acme Customer Support Bot v2.1",
+  "assessor": "Rudrendu Paul",
+  "date": "2026-05-31",
+  "overall_score_pct": 40,
+  "readiness_band": "EXPOSED",
+  "answered_questions": 25,
+  "total_questions": 25,
+  "vectors": [
+    {
+      "name": "Hallucination & Factuality",
+      "score_pct": 40,
+      "risk_level": "HIGH",
+      "answered_yes": 2,
+      "total": 5,
+      "gaps": [
+        "H2",
+        "H3",
+        "H4"
+      ]
+    },
+    {
+      "name": "Prompt Injection & Adversarial Inputs",
+      "score_pct": 40,
+      "risk_level": "HIGH",
+      "answered_yes": 2,
+      "total": 5,
+      "gaps": [
+        "P2",
+        "P4",
+        "P5"
+      ]
+    },
+    {
+      "name": "Output Safety & Policy Compliance",
+      "score_pct": 60,
+      "risk_level": "MEDIUM",
+      "answered_yes": 3,
+      "total": 5,
+      "gaps": [
+        "O3",
+        "O5"
+      ]
+    },
+    {
+      "name": "Observability & Incident Response",
+      "score_pct": 40,
+      "risk_level": "HIGH",
+      "answered_yes": 2,
+      "total": 5,
+      "gaps": [
+        "I2",
+        "I4",
+        "I5"
+      ]
+    },
+    {
+      "name": "Governance & Access Control",
+      "score_pct": 20,
+      "risk_level": "CRITICAL",
+      "answered_yes": 1,
+      "total": 5,
+      "gaps": [
+        "G1",
+        "G2",
+        "G3",
+        "G5"
+      ]
+    }
+  ],
+  "answers": {
+    "H1": true,
+    "H2": false,
+    "H3": false,
+    "H4": false,
+    "H5": true,
+    "P1": true,
+    "P2": false,
+    "P3": true,
+    "P4": false,
+    "P5": false,
+    "O1": true,
+    "O2": true,
+    "O3": false,
+    "O4": true,
+    "O5": false,
+    "I1": true,
+    "I2": false,
+    "I3": true,
+    "I4": false,
+    "I5": false,
+    "G1": false,
+    "G2": false,
+    "G3": false,
+    "G4": true,
+    "G5": false
+  }
+}
