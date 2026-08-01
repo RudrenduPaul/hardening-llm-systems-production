@@ -15,7 +15,8 @@
 # Ch1:  requests, pydantic
 # Ch2:  deepeval, ragas, datasets, scipy, scikit-learn, openai
 # Ch3:  deepeval, ragas, langchain, openai
-# Ch4:  langchain, pydantic, langchain-openai, pytest, pytest-asyncio
+# Ch4:  llm-guard, pydantic, openai, pytest (sentence-transformers/scikit-learn/numpy for the
+#       illustrative embedding-detection comparison in section 4.5 only, not the companion script)
 # Ch5:  pinecone-client, langchain, sentence-transformers, scipy, numpy, pytest
 # Ch6:  garak, pyrit, ragas, sentence-transformers, pytest
 # Ch7:  langfuse, opentelemetry-sdk, langchain, langchain-openai, langgraph, sentence-transformers
