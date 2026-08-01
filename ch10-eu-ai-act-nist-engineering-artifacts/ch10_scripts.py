@@ -1,23 +1,27 @@
 """
-Chapter 11 — EU AI Act + NIST AI RMF Compliance Automation
+Chapter 10 — EU AI Act + NIST AI RMF Compliance Automation
 ===========================================================
 Manning book: "Hardening LLM Systems in Production" by Rudrendu Paul
 
 Companion script covering:
-  - AnnexIVPackage dataclass with completeness_score()
-  - Annex IV CI gate (sys.exit(1) on failure)
-  - Output provenance recorder with HMAC-SHA256 signature
-  - TamperEvidentAuditLog with chained-hash tamper detection
-  - NISTAI6001Tracker with ImplementationStatus enum and gap_report()
-  - Dual-framework mapping report (EU AI Act + NIST cross-reference)
-  - PostMarketMonitoringReport dataclass
+  - Annex IV artifact index generator (section 10.3, Listing 10.0)
+  - AnnexIVPackage dataclass with completeness_score() (Listing 10.1)
+  - Annex IV CI gate (sys.exit(1) on failure) (Listing 10.2)
+  - Output provenance recorder with HMAC-SHA256 signature (Listing 10.3)
+  - TamperEvidentAuditLog with chained-hash tamper detection (Listing 10.4)
+  - NIST AI 600-1 triage report generator (Listing 10.4b)
+  - NISTAI6001Tracker with ImplementationStatus enum and gap_report() (Listing 10.5)
+  - Dual-framework mapping report (EU AI Act + NIST cross-reference) (Listing 10.6)
+  - PostMarketMonitoringReport dataclass (Listing 10.8c)
+  - CI/CD Annex IV completeness gate with version + freshness checks (Listing 10.10)
+  - IncidentEscalation, Article73NotificationPackage, ContainmentRunbook,
+    IncidentCapture, IncidentClassifier (sections 10.7-10.8)
 
 Dependencies: pyyaml>=6.0  (all others are stdlib)
 """
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import hmac
 import json
@@ -34,102 +38,196 @@ import yaml  # pyyaml>=6.0
 
 
 # ---------------------------------------------------------------------------
-# 1. AnnexIVPackage — EU AI Act Article 11 / Annex IV documentation bundle
+# 1. Annex IV artifact index generator (section 10.3)
+# Listing 10.0
+# ---------------------------------------------------------------------------
+
+ANNEX_IV_ARTIFACT_MAP: Dict[str, Dict[str, Any]] = {
+    "section_1_general_description": {
+        "required": ["architecture_diagram_path", "model_card_path", "intended_use_policy_path"],
+        "owner": "Platform engineering + ML engineering",
+        "cadence": "On major version / model update / use case change",
+        "format": "PDF + versioned Markdown + PDF",
+    },
+    "section_2_system_elements": {
+        "required": ["data_pipeline_diagram_path", "training_data_doc_path",
+                     "model_version_history_path", "finetuning_records_path"],
+        "owner": "ML engineering",
+        "cadence": "On pipeline change / dataset change / model update",
+        "format": "PDF + Markdown CHANGELOG",
+    },
+    "section_3_monitoring_control": {
+        "required": ["dashboard_config_path", "alert_runbook_path",
+                     "human_oversight_protocol_path", "operational_procedures_path"],
+        "owner": "Platform engineering + on-call rotation",
+        "cadence": "On threshold change / on-call rotation change",
+        "format": "JSON export + PDF (named owner)",
+    },
+    "section_4_risk_management": {
+        "required": ["risk_assessment_path", "red_team_report_path",
+                     "bias_assessment_path", "adversarial_robustness_path"],
+        "owner": "Security + ML fairness",
+        "cadence": "Quarterly + after major changes",
+        "format": "PDF + JSON",
+    },
+    "section_5_lifecycle_changes": {
+        "required": ["changelog_path", "model_update_log_path",
+                     "prompt_change_log_path", "deployment_approval_path"],
+        "owner": "Engineering + ML/product engineering + engineering management",
+        "cadence": "On every relevant change event",
+        "format": "CHANGELOG.md + signed PDF",
+    },
+    "section_6_conformity_assessment": {
+        "required": ["evaluation_results_path", "third_party_audit_path", "self_assessment_path"],
+        "owner": "ML engineering + engineering leadership",
+        "cadence": "Every model version / before each production deploy",
+        "format": "JSON/CSV + signed PDF",
+    },
+}
+
+
+def generate_annex_iv_index(
+    deployment_config: Dict[str, str],
+    max_artifact_age_days: int = 30,
+) -> Dict[str, Any]:
+    """
+    Checks a deployment's artifact paths against ANNEX_IV_ARTIFACT_MAP.
+
+    Parameters
+    ----------
+    deployment_config : dict
+        Maps each required artifact key (e.g. "architecture_diagram_path")
+        to its filesystem path.
+    max_artifact_age_days : int
+        Artifacts older than this are flagged as stale.
+
+    Returns
+    -------
+    dict with keys: sections, sections_with_gaps, sections_with_stale_artifacts,
+    ready_for_audit
+    """
+    now = time.time()
+    sections: Dict[str, Any] = {}
+    sections_with_gaps: List[str] = []
+    sections_with_stale_artifacts: List[str] = []
+
+    for section, spec in ANNEX_IV_ARTIFACT_MAP.items():
+        present, missing, stale = [], [], []
+        for key in spec["required"]:
+            path = deployment_config.get(key)
+            if not path or not os.path.exists(path):
+                missing.append(key)
+                continue
+            present.append(key)
+            age_days = (now - os.path.getmtime(path)) / 86400
+            if age_days > max_artifact_age_days:
+                stale.append(key)
+
+        sections[section] = {
+            "owner": spec["owner"],
+            "cadence": spec["cadence"],
+            "format": spec["format"],
+            "present": present,
+            "missing": missing,
+            "stale": stale,
+        }
+        if missing:
+            sections_with_gaps.append(section)
+        if stale:
+            sections_with_stale_artifacts.append(section)
+
+    return {
+        "generated_at": now,
+        "sections": sections,
+        "sections_with_gaps": sections_with_gaps,
+        "sections_with_stale_artifacts": sections_with_stale_artifacts,
+        "ready_for_audit": not sections_with_gaps and not sections_with_stale_artifacts,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 2. AnnexIVPackage — EU AI Act Article 11 / Annex IV documentation bundle
+# Listing 10.1
 # ---------------------------------------------------------------------------
 
 ANNEX_IV_REQUIRED_FIELDS: List[str] = [
-    "system_name",
-    "system_version",
-    "intended_purpose",
-    "risk_category",          # Article 6: limited / high / unacceptable
-    "provider_name",
-    "provider_address",
-    "contact_email",
-    "general_description",    # Annex IV §1
-    "design_specifications",  # Annex IV §2
-    "training_data_summary",  # Annex IV §3
-    "validation_testing",     # Annex IV §4
-    "technical_standards",    # Annex IV §5
-    "post_market_plan",       # Annex IV §6
-    "human_oversight_measures",  # Article 14
-    "accuracy_metrics",
-    "robustness_measures",
-    "cybersecurity_measures",  # Annex IV §7
-    "declaration_of_conformity",
+    "system_name", "system_version", "intended_purpose",
+    "model_family", "model_version", "training_data_description",
+    "architecture_description", "human_oversight_design",
+    "risk_categories_addressed",
 ]
 
-ANNEX_IV_OPTIONAL_FIELDS: List[str] = [
-    "eu_database_registration_id",
-    "notified_body_id",
-    "third_party_audit_report",
-    "bias_assessment_report",
-    "explainability_documentation",
+# Fields whose value is a filesystem path; completeness also checks these
+# actually exist on disk, not just that the field is non-empty.
+ANNEX_IV_ARTIFACT_PATH_FIELDS: List[str] = [
+    "red_team_report_path", "bias_assessment_path",
+    "evaluation_results_path", "adversarial_robustness_path",
 ]
 
 
 @dataclass
 class AnnexIVPackage:
-    """
-    Structured representation of an EU AI Act Annex IV technical documentation
-    bundle for a high-risk AI system.
+    """Assembles an EU AI Act Annex IV documentation package from CI/CD artifacts."""
 
-    All required fields must be non-empty strings for completeness_score == 1.0.
-    Optional fields raise the score beyond the minimum-pass threshold.
-    """
+    # General description (Annex IV, point 1)
+    system_name: str
+    system_version: str
+    intended_purpose: str
+    deployment_date: str
+    operator_name: str
 
-    # --- Required fields ---
-    system_name: str = ""
-    system_version: str = ""
-    intended_purpose: str = ""
-    risk_category: str = ""
-    provider_name: str = ""
-    provider_address: str = ""
-    contact_email: str = ""
-    general_description: str = ""
-    design_specifications: str = ""
-    training_data_summary: str = ""
-    validation_testing: str = ""
-    technical_standards: str = ""
-    post_market_plan: str = ""
-    human_oversight_measures: str = ""
-    accuracy_metrics: str = ""
-    robustness_measures: str = ""
-    cybersecurity_measures: str = ""
-    declaration_of_conformity: str = ""
+    # System elements (Annex IV, point 2)
+    model_family: str
+    model_version: str
+    training_data_description: str
+    architecture_description: str
+    components: List[str] = field(default_factory=list)
 
-    # --- Optional fields ---
-    eu_database_registration_id: str = ""
-    notified_body_id: str = ""
-    third_party_audit_report: str = ""
-    bias_assessment_report: str = ""
-    explainability_documentation: str = ""
+    # Monitoring and control (Annex IV, point 3)
+    monitoring_metrics: List[str] = field(default_factory=list)
+    alert_thresholds: Dict[str, float] = field(default_factory=dict)
+    human_oversight_design: str = ""
 
-    # --- Metadata ---
+    # Risk management (Annex IV, point 4)
+    risk_categories_addressed: List[str] = field(default_factory=list)
+    red_team_report_path: str = ""
+    bias_assessment_path: str = ""
+    adversarial_robustness_path: str = ""
+
+    # Conformity assessment (Annex IV, point 6)
+    evaluation_results_path: str = ""
+    self_assessment_path: str = ""
+
+    # Metadata
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    schema_version: str = "annex-iv-v1.0"
+    schema_version: str = "annex-iv-v2.0"
+
+    def missing_required_fields(self) -> List[str]:
+        """Return the required fields (section 10.3.3) that are empty."""
+        return [f for f in ANNEX_IV_REQUIRED_FIELDS if not getattr(self, f, None)]
+
+    def missing_or_stale_artifacts(self) -> List[str]:
+        """Artifact-path fields that are unset or point to a file that doesn't exist."""
+        return [
+            f for f in ANNEX_IV_ARTIFACT_PATH_FIELDS
+            if not getattr(self, f, "") or not Path(getattr(self, f)).exists()
+        ]
 
     def completeness_score(self) -> float:
         """
-        Return a float in [0.0, 1.0] representing how complete this package is.
-
-        Formula:
-          required_weight = 0.85  (all 18 required fields, equally weighted)
-          optional_weight = 0.15  (5 optional fields, equally weighted)
-        A score >= 0.85 means all required fields are present (CI gate threshold).
+        Checks two distinct things: whether the required fields are populated
+        with non-empty values (75% weight), and whether the referenced
+        artifact files actually exist on disk (25% weight). A package with
+        valid-looking fields pointing at files that were never generated
+        scores below 1.0 here even though every field is "filled in".
         """
-        req_filled = sum(
-            1 for f in ANNEX_IV_REQUIRED_FIELDS if getattr(self, f, "").strip()
-        )
-        opt_filled = sum(
-            1 for f in ANNEX_IV_OPTIONAL_FIELDS if getattr(self, f, "").strip()
-        )
-        req_score = (req_filled / len(ANNEX_IV_REQUIRED_FIELDS)) * 0.85
-        opt_score = (opt_filled / len(ANNEX_IV_OPTIONAL_FIELDS)) * 0.15
-        return round(req_score + opt_score, 4)
+        req_filled = len(ANNEX_IV_REQUIRED_FIELDS) - len(self.missing_required_fields())
+        req_score = (req_filled / len(ANNEX_IV_REQUIRED_FIELDS)) * 0.75
 
-    def missing_required_fields(self) -> List[str]:
-        """Return list of required fields that are empty or whitespace-only."""
-        return [f for f in ANNEX_IV_REQUIRED_FIELDS if not getattr(self, f, "").strip()]
+        artifacts_ok = len(ANNEX_IV_ARTIFACT_PATH_FIELDS) - len(self.missing_or_stale_artifacts())
+        artifact_score = (artifacts_ok / len(ANNEX_IV_ARTIFACT_PATH_FIELDS)) * 0.25
+
+        return round(req_score + artifact_score, 4)
 
     def to_yaml(self) -> str:
         """Serialize package to a YAML string for storage / version control."""
@@ -141,319 +239,305 @@ class AnnexIVPackage:
         data = yaml.safe_load(yaml_str)
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
+    def to_json(self, output_path: Optional[Path] = None) -> str:
+        """Serialize package to a JSON string; optionally write it to disk."""
+        payload = json.dumps(asdict(self), indent=2)
+        if output_path:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text(payload, encoding="utf-8")
+        return payload
+
 
 # ---------------------------------------------------------------------------
-# 2. Annex IV CI Gate
+# 3. Annex IV completeness checker for CI/CD integration
+# Listing 10.2
 # ---------------------------------------------------------------------------
 
-ANNEX_IV_CI_THRESHOLD = 0.85  # All required fields must be present
-
-
-def run_annex_iv_ci_gate(package: AnnexIVPackage, *, strict: bool = True) -> None:
+def check_annex_iv_completeness(
+    package_path: str,
+    min_completeness_score: float = 1.0,  # 100% required for production deploys
+) -> bool:
     """
-    CI/CD gate that checks Annex IV documentation completeness.
-
-    Parameters
-    ----------
-    package : AnnexIVPackage
-        The documentation bundle to validate.
-    strict : bool
-        If True (default), call sys.exit(1) on failure so CI pipelines catch it.
-        If False, raise ValueError instead (useful in test suites).
-
-    Exit codes
-    ----------
-    0 — all required fields present; score >= threshold
-    1 — one or more required fields missing
+    Loads an Annex IV package JSON and checks completeness.
+    Exits with code 1 if completeness score is below threshold.
     """
-    score = package.completeness_score()
-    missing = package.missing_required_fields()
+    try:
+        data = json.loads(Path(package_path).read_text())
+    except FileNotFoundError:
+        print(f"ANNEX IV GATE FAILED: Package not found at {package_path}")
+        sys.exit(1)
 
-    print(f"[Annex IV Gate] System: {package.system_name!r} v{package.system_version}")
-    print(f"[Annex IV Gate] Completeness score: {score:.2%} (threshold: {ANNEX_IV_CI_THRESHOLD:.2%})")
+    # Check required top-level fields
+    required = [
+        "system_name", "system_version", "intended_purpose",
+        "model_family", "model_version", "training_data_description",
+        "architecture_description", "human_oversight_design",
+        "risk_categories_addressed",
+    ]
 
+    missing = [f for f in required if not data.get(f)]
     if missing:
-        print("[Annex IV Gate] FAIL — missing required fields:")
-        for field_name in missing:
-            print(f"  - {field_name}")
-        if strict:
-            sys.exit(1)
-        raise ValueError(f"Annex IV incomplete: {missing}")
+        print(f"ANNEX IV GATE FAILED: Missing required fields: {missing}")
+        sys.exit(1)
 
-    print("[Annex IV Gate] PASS — all required Annex IV fields present.")
+    # Check that evaluation artifacts actually exist on disk
+    artifact_fields = ["red_team_report_path", "evaluation_results_path"]
+    missing_artifacts = [
+        f for f in artifact_fields if not Path(data.get(f, "")).exists()
+    ]
+    if missing_artifacts:
+        print(f"ANNEX IV GATE FAILED: Referenced artifacts not found on disk: {missing_artifacts}")
+        sys.exit(1)
+
+    score = 1.0  # every required field present and every referenced artifact exists
+    if score < min_completeness_score:
+        print(
+            f"ANNEX IV GATE FAILED: Completeness score {score:.2%} "
+            f"below threshold {min_completeness_score:.2%}"
+        )
+        sys.exit(1)
+
+    print(f"ANNEX IV GATE PASSED: {package_path} is complete (score {score:.2%}).")
+    return True
 
 
 # ---------------------------------------------------------------------------
-# 3. Output Provenance Recorder (HMAC-SHA256)
+# 4. Output Provenance Recorder (HMAC-SHA256)
+# Listing 10.3
 # ---------------------------------------------------------------------------
-
-def _get_hmac_key() -> bytes:
-    """
-    Retrieve the HMAC signing key from the environment.
-    In production, inject via a secrets manager (Vault, AWS Secrets Manager, etc.).
-    """
-    key_hex = os.environ.get("LLM_PROVENANCE_HMAC_KEY", "")
-    if not key_hex:
-        # Fallback for local dev — NOT for production
-        key_hex = "deadbeef" * 8  # 32-byte all-zeros equivalent placeholder
-    return bytes.fromhex(key_hex)
-
-
-def sign_output(payload: Dict[str, Any]) -> str:
-    """
-    Compute an HMAC-SHA256 signature over the canonical JSON representation
-    of a provenance payload.
-
-    Returns the hex-encoded signature string.
-    """
-    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    sig = hmac.new(_get_hmac_key(), canonical.encode("utf-8"), hashlib.sha256)
-    return sig.hexdigest()
-
 
 @dataclass
 class ProvenanceRecord:
     """
     A tamper-evident record linking an LLM output to its input context,
-    model identity, and runtime parameters.
+    model identity, and runtime parameters. Only hashes of the input and
+    output are stored, never the raw text, which keeps records small,
+    storable for years, and free of PII.
     """
     record_id: str
+    timestamp_utc: float
     model_id: str
     model_version: str
-    prompt_hash: str        # SHA-256 of the full prompt (hex)
-    output_hash: str        # SHA-256 of the raw output (hex)
-    timestamp_utc: str
-    temperature: float
-    max_tokens: int
-    system_prompt_version: str
-    user_id: str
-    session_id: str
-    signature: str = field(init=False)
-
-    def __post_init__(self) -> None:
-        payload = {
-            "record_id": self.record_id,
-            "model_id": self.model_id,
-            "model_version": self.model_version,
-            "prompt_hash": self.prompt_hash,
-            "output_hash": self.output_hash,
-            "timestamp_utc": self.timestamp_utc,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "system_prompt_version": self.system_prompt_version,
-            "user_id": self.user_id,
-            "session_id": self.session_id,
-        }
-        self.signature = sign_output(payload)
-
-    def verify(self) -> bool:
-        """Re-derive the signature and compare; returns True if record is intact."""
-        payload = {
-            "record_id": self.record_id,
-            "model_id": self.model_id,
-            "model_version": self.model_version,
-            "prompt_hash": self.prompt_hash,
-            "output_hash": self.output_hash,
-            "timestamp_utc": self.timestamp_utc,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "system_prompt_version": self.system_prompt_version,
-            "user_id": self.user_id,
-            "session_id": self.session_id,
-        }
-        expected = sign_output(payload)
-        return hmac.compare_digest(expected, self.signature)
+    prompt_template_version: str
+    user_session_id: str          # anonymized session identifier
+    retrieval_context_hash: str   # SHA-256 of retrieved documents, if RAG
+    input_hash: str               # SHA-256 of the user input
+    output_hash: str              # SHA-256 of the model output
+    signature: str                # HMAC-SHA256 of the record
 
 
-class OutputProvenanceRecorder:
-    """
-    Records and persists provenance records for every LLM output.
+def _provenance_payload(record: "ProvenanceRecord") -> Dict[str, Any]:
+    """Canonical field set that gets signed / re-verified (excludes `signature` itself)."""
+    return {
+        "record_id": record.record_id,
+        "timestamp_utc": record.timestamp_utc,
+        "model_id": record.model_id,
+        "model_version": record.model_version,
+        "prompt_template_version": record.prompt_template_version,
+        "user_session_id": record.user_session_id,
+        "retrieval_context_hash": record.retrieval_context_hash,
+        "input_hash": record.input_hash,
+        "output_hash": record.output_hash,
+    }
 
-    Usage
-    -----
-    recorder = OutputProvenanceRecorder(log_path=Path("provenance.jsonl"))
-    record = recorder.record(
-        prompt="What is the capital of France?",
-        output="Paris.",
-        model_id="gpt-4o",
-        model_version="2024-08-06",
-        temperature=0.0,
-        max_tokens=256,
-        system_prompt_version="v3.1",
-        user_id="u-001",
-        session_id="sess-xyz",
+
+def create_provenance_record(
+    model_id: str,
+    model_version: str,
+    prompt_template_version: str,
+    session_id: str,
+    user_input: str,
+    model_output: str,
+    retrieval_context: str = "",
+    signing_key: bytes = None,
+) -> ProvenanceRecord:
+    """Creates a cryptographically signed provenance record for a model output."""
+    if signing_key is None:
+        signing_key = os.environ.get("PROVENANCE_SIGNING_KEY", "dev-key").encode()
+
+    import uuid
+
+    record = ProvenanceRecord(
+        record_id=str(uuid.uuid4()),
+        timestamp_utc=time.time(),
+        model_id=model_id,
+        model_version=model_version,
+        prompt_template_version=prompt_template_version,
+        user_session_id=session_id,
+        retrieval_context_hash=hashlib.sha256(retrieval_context.encode("utf-8")).hexdigest(),
+        input_hash=hashlib.sha256(user_input.encode("utf-8")).hexdigest(),
+        output_hash=hashlib.sha256(model_output.encode("utf-8")).hexdigest(),
+        signature="",
     )
-    """
+    canonical = json.dumps(_provenance_payload(record), sort_keys=True)
+    record.signature = hmac.new(signing_key, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+    return record
+
+
+def verify_provenance_record(record: ProvenanceRecord, signing_key: bytes = None) -> bool:
+    """Recomputes the HMAC-SHA256 signature and compares it to the stored one."""
+    if signing_key is None:
+        signing_key = os.environ.get("PROVENANCE_SIGNING_KEY", "dev-key").encode()
+    canonical = json.dumps(_provenance_payload(record), sort_keys=True)
+    expected = hmac.new(signing_key, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, record.signature)
+
+
+class ProvenanceLog:
+    """Appends signed ProvenanceRecords to a JSONL file and reloads them by session/timestamp."""
 
     def __init__(self, log_path: Path) -> None:
         self.log_path = log_path
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _sha256(self, text: str) -> str:
-        return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-    def record(
-        self,
-        prompt: str,
-        output: str,
-        model_id: str,
-        model_version: str,
-        temperature: float,
-        max_tokens: int,
-        system_prompt_version: str,
-        user_id: str,
-        session_id: str,
-    ) -> ProvenanceRecord:
-        import uuid
-
-        rec = ProvenanceRecord(
-            record_id=str(uuid.uuid4()),
-            model_id=model_id,
-            model_version=model_version,
-            prompt_hash=self._sha256(prompt),
-            output_hash=self._sha256(output),
-            timestamp_utc=datetime.now(timezone.utc).isoformat(),
-            temperature=temperature,
-            max_tokens=max_tokens,
-            system_prompt_version=system_prompt_version,
-            user_id=user_id,
-            session_id=session_id,
-        )
+    def append(self, record: ProvenanceRecord) -> None:
         with open(self.log_path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(asdict(rec)) + "\n")
-        return rec
+            fh.write(json.dumps(asdict(record)) + "\n")
 
     def load_all(self) -> List[ProvenanceRecord]:
-        records = []
+        records: List[ProvenanceRecord] = []
         if not self.log_path.exists():
             return records
         with open(self.log_path, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
-                if not line:
-                    continue
-                data = json.loads(line)
-                # Rebuild without triggering __post_init__ signature re-derivation
-                rec = ProvenanceRecord.__new__(ProvenanceRecord)
-                rec.__dict__.update(data)
-                records.append(rec)
+                if line:
+                    records.append(ProvenanceRecord(**json.loads(line)))
         return records
 
 
 # ---------------------------------------------------------------------------
-# 4. TamperEvidentAuditLog — chained-hash append-only log
+# 5. TamperEvidentAuditLog — chained-hash append-only log
+# Listing 10.4
 # ---------------------------------------------------------------------------
 
 class TamperEvidentAuditLog:
     """
-    An append-only audit log where each entry's hash chains to the previous,
-    making any deletion or modification of a historical record detectable.
-
-    Each log entry is a JSON line with fields:
-      seq, timestamp_utc, event_type, payload, prev_hash, entry_hash
-
-    entry_hash = SHA-256(seq + timestamp_utc + event_type + payload_json + prev_hash)
+    Append-only log where each entry includes the hash of the previous entry.
+    Tampering with any entry breaks the hash chain.
     """
 
-    GENESIS_HASH = "0" * 64  # Sentinel for the first entry
-
-    def __init__(self, log_path: Path) -> None:
-        self.log_path = log_path
+    def __init__(self, log_path: str):
+        self.log_path = Path(log_path)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        self._last_hash: str = self.GENESIS_HASH
-        self._seq: int = 0
-        self._bootstrap()
-
-    def _bootstrap(self) -> None:
-        """Replay existing log to restore last_hash and seq counter."""
         if not self.log_path.exists():
-            return
-        with open(self.log_path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                entry = json.loads(line)
-                self._last_hash = entry["entry_hash"]
-                self._seq = entry["seq"]
+            self.log_path.write_text("")
+        self._last_hash = self._compute_last_hash()
 
-    def _compute_entry_hash(
-        self, seq: int, timestamp: str, event_type: str, payload_json: str, prev_hash: str
-    ) -> str:
-        raw = f"{seq}{timestamp}{event_type}{payload_json}{prev_hash}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    def _compute_last_hash(self) -> str:
+        """
+        Returns the previous entry's own hash so a freshly instantiated
+        log (a new process re-opening an existing file) resumes the chain
+        correctly. Hashing the file's full text here instead would produce
+        a value that never matches any entry's stored hash, and the very
+        next append() would silently start an unverifiable chain.
+        """
+        lines = [line for line in self.log_path.read_text().splitlines() if line.strip()]
+        if not lines:
+            return "genesis"
+        return json.loads(lines[-1])["hash"]
 
-    def append(self, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Append a new entry to the log; returns the full entry dict."""
-        self._seq += 1
-        timestamp = datetime.now(timezone.utc).isoformat()
-        payload_json = json.dumps(payload, sort_keys=True)
-        entry_hash = self._compute_entry_hash(
-            self._seq, timestamp, event_type, payload_json, self._last_hash
-        )
+    def append(self, event_type: str, payload: dict) -> str:
+        """Appends a tamper-evident entry. Returns the entry hash."""
         entry = {
-            "seq": self._seq,
-            "timestamp_utc": timestamp,
+            "timestamp": time.time(),
             "event_type": event_type,
             "payload": payload,
             "prev_hash": self._last_hash,
-            "entry_hash": entry_hash,
         }
+        entry_json = json.dumps(entry, sort_keys=True)
+        entry_hash = hashlib.sha256(entry_json.encode()).hexdigest()
+        entry["hash"] = entry_hash
+
         with open(self.log_path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry) + "\n")
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
         self._last_hash = entry_hash
-        return entry
+        return entry_hash
 
-    def verify_integrity(self) -> bool:
+    def verify_integrity(self) -> Dict[str, Any]:
         """
-        Replay the entire log and verify the hash chain is unbroken.
-
-        Returns True if no tampering detected; False (with printed diagnostics)
-        if any entry's recomputed hash does not match the stored entry_hash,
-        or if any entry's prev_hash does not match the preceding entry's entry_hash.
+        Replays every entry, recomputing each entry's hash from its own
+        fields, and checks that `prev_hash` matches the previous entry's
+        stored hash. Returns {"status": "intact", ...} when the chain is
+        unbroken, or {"status": "broken", "broken_at_entry": N} pointing at
+        the first entry whose hash no longer matches what the chain expects.
         """
-        if not self.log_path.exists():
-            print("[AuditLog] No log file found — nothing to verify.")
-            return True
+        if not self.log_path.exists() or not self.log_path.read_text().strip():
+            return {"status": "intact", "entries_verified": 0}
 
-        entries = []
-        with open(self.log_path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if line:
-                    entries.append(json.loads(line))
+        prev_hash = "genesis"
+        idx = -1
+        for idx, line in enumerate(self.log_path.read_text().splitlines()):
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            stored_hash = entry.pop("hash")
+            recomputed = hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
 
-        if not entries:
-            print("[AuditLog] Empty log — integrity OK.")
-            return True
+            if entry["prev_hash"] != prev_hash or recomputed != stored_hash:
+                return {"status": "broken", "broken_at_entry": idx}
 
-        prev_hash = self.GENESIS_HASH
-        ok = True
+            prev_hash = stored_hash
 
-        for entry in entries:
-            seq = entry["seq"]
-            expected_hash = self._compute_entry_hash(
-                seq,
-                entry["timestamp_utc"],
-                entry["event_type"],
-                json.dumps(entry["payload"], sort_keys=True),
-                entry["prev_hash"],
-            )
-            if entry["entry_hash"] != expected_hash:
-                print(f"[AuditLog] TAMPER DETECTED at seq={seq}: entry_hash mismatch")
-                ok = False
-            if entry["prev_hash"] != prev_hash:
-                print(f"[AuditLog] TAMPER DETECTED at seq={seq}: prev_hash chain broken")
-                ok = False
-            prev_hash = entry["entry_hash"]
-
-        if ok:
-            print(f"[AuditLog] Integrity OK — {len(entries)} entries verified.")
-        return ok
+        return {"status": "intact", "entries_verified": idx + 1}
 
 
 # ---------------------------------------------------------------------------
-# 5. NIST AI RMF 600-1 Tracker
+# 6. NIST AI 600-1 triage report generator (section 10.5.1)
+# Listing 10.4b
+# ---------------------------------------------------------------------------
+
+class ClusterPriority(str, Enum):
+    HIGH = "high"       # address before production launch
+    MEDIUM = "medium"   # address in first post-launch sprint
+    LOW = "low"         # address in quarterly review
+
+
+@dataclass
+class NistAction:
+    action_id: str
+    cluster: str
+    description: str
+    engineering_artifact: str
+    book_reference: str
+    implemented: bool = False
+    evidence_path: str = ""
+
+
+@dataclass
+class NistTriageReport:
+    """Generates a prioritized NIST AI 600-1 action list for a given deployment."""
+    deployment_type: str  # "chat", "rag", "agent", or "batch"
+    risk_level: str       # "low", "medium", "high"
+    actions: List[NistAction] = field(default_factory=list)
+
+    def add_action(self, action: NistAction) -> None:
+        self.actions.append(action)
+
+    def mark_implemented(self, action_id: str, evidence_path: str = "") -> None:
+        for a in self.actions:
+            if a.action_id == action_id:
+                a.implemented = True
+                a.evidence_path = evidence_path
+                return
+        raise KeyError(f"Unknown NIST action_id: {action_id!r}")
+
+    def gap_summary(self) -> Dict[str, Any]:
+        """Returns the sprint backlog: every action not yet implemented."""
+        gaps = [asdict(a) for a in self.actions if not a.implemented]
+        return {
+            "deployment_type": self.deployment_type,
+            "risk_level": self.risk_level,
+            "total_actions": len(self.actions),
+            "implemented_count": len(self.actions) - len(gaps),
+            "gap_count": len(gaps),
+            "gaps": gaps,
+        }
+
+
+# ---------------------------------------------------------------------------
+# 7. NIST AI 600-1 control tracker with gap report generator (section 10.5.3)
+# Listing 10.5
 # ---------------------------------------------------------------------------
 
 class ImplementationStatus(str, Enum):
@@ -461,379 +545,272 @@ class ImplementationStatus(str, Enum):
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
     IMPLEMENTED = "implemented"
-    NOT_APPLICABLE = "not_applicable"
-
-
-# NIST AI 600-1 Gen AI Profile subcategory codes (illustrative subset)
-NIST_AI_600_1_SUBCATEGORIES: Dict[str, str] = {
-    "GV-1.1": "Policies, processes, procedures and practices for organizational TEVV",
-    "GV-1.2": "Organizational teams are committed to governance of AI risk",
-    "GV-2.1": "Scientific integrity and TEVV considerations are integrated",
-    "GV-3.1": "Organizational risk tolerance for AI is established",
-    "GV-4.1": "Organizational teams are committed to accountability",
-    "GV-5.1": "Policies and practices are in place for AI worker diversity",
-    "GV-6.1": "Policies for third-party entities are established",
-    "MP-2.1": "Scientific findings used in AI design are identified",
-    "MP-2.2": "TEVV plans include consideration of scientific findings",
-    "MP-4.1": "Risks and benefits of an AI system are examined",
-    "MS-1.1": "AI system risks are identified and assessed",
-    "MS-1.2": "Established metrics are used to measure performance",
-    "MS-2.1": "Error characteristics are tested across deployment contexts",
-    "MS-2.2": "Design decisions are documented",
-    "MS-2.5": "AI system to be deployed in high-risk settings goes through rigorous testing",
-    "MS-2.6": "Bias testing is conducted",
-    "MS-2.10": "Privacy risk is examined",
-    "MS-4.1": "Performance on standardized or widely used benchmarks is documented",
-    "MG-2.2": "Mechanisms are in place to assess and adjust",
-    "MG-3.1": "Risk treatment plans are documented",
-    "MG-4.1": "Post-deployment AI risks and benefits are monitored",
-    "MG-4.2": "Evaluations of AI risks are used to make adjustments",
-}
+    VERIFIED = "verified"
 
 
 @dataclass
-class NISTControlEntry:
-    """Tracks implementation status and evidence for a single NIST AI 600-1 subcategory."""
-    subcategory_code: str
+class NISTControl:
+    control_id: str
+    risk_category: str
     description: str
     status: ImplementationStatus = ImplementationStatus.NOT_STARTED
-    evidence_reference: str = ""
     owner: str = ""
-    target_date: str = ""
+    evidence_path: str = ""
     notes: str = ""
 
 
 class NISTAI6001Tracker:
-    """
-    Tracks implementation status of NIST AI RMF 600-1 generative AI profile
-    subcategories for an LLM system.
+    """Tracks implementation status of NIST AI 600-1 mitigation actions."""
 
-    Usage
-    -----
-    tracker = NISTAI6001Tracker(system_name="CustomerCareBot")
-    tracker.update("GV-1.1", ImplementationStatus.IMPLEMENTED,
-                   evidence_reference="governance-policy-v2.pdf",
-                   owner="AI Governance Team")
-    report = tracker.gap_report()
-    """
+    def __init__(self) -> None:
+        self.controls: Dict[str, NISTControl] = {}
 
-    def __init__(self, system_name: str) -> None:
-        self.system_name = system_name
-        self.controls: Dict[str, NISTControlEntry] = {
-            code: NISTControlEntry(subcategory_code=code, description=desc)
-            for code, desc in NIST_AI_600_1_SUBCATEGORIES.items()
-        }
+    def add_control(self, control: NISTControl) -> None:
+        self.controls[control.control_id] = control
 
-    def update(
+    def update_status(
         self,
-        subcategory_code: str,
+        control_id: str,
         status: ImplementationStatus,
-        evidence_reference: str = "",
         owner: str = "",
-        target_date: str = "",
+        evidence_path: str = "",
         notes: str = "",
     ) -> None:
-        """Update the implementation status of a subcategory."""
-        if subcategory_code not in self.controls:
-            raise KeyError(f"Unknown NIST AI 600-1 subcategory: {subcategory_code!r}")
-        ctrl = self.controls[subcategory_code]
+        """Update the implementation status of a control."""
+        if control_id not in self.controls:
+            raise KeyError(f"Unknown control_id: {control_id!r}")
+        ctrl = self.controls[control_id]
         ctrl.status = status
-        ctrl.evidence_reference = evidence_reference
-        ctrl.owner = owner
-        ctrl.target_date = target_date
-        ctrl.notes = notes
+        if owner:
+            ctrl.owner = owner
+        if evidence_path:
+            ctrl.evidence_path = evidence_path
+        if notes:
+            ctrl.notes = notes
 
     def gap_report(self) -> Dict[str, Any]:
-        """
-        Generate a structured gap report.
-
-        Returns a dict with:
-          - system_name
-          - generated_at
-          - summary: counts by status
-          - gaps: list of entries with status NOT_STARTED or IN_PROGRESS
-          - implemented: list of implemented entries
-          - not_applicable: list of N/A entries
-        """
-        by_status: Dict[str, List[Dict]] = {
-            s.value: [] for s in ImplementationStatus
-        }
+        """Coverage percentage plus the list of controls not yet implemented or verified."""
+        by_status: Dict[str, List[Dict[str, Any]]] = {s.value: [] for s in ImplementationStatus}
         for ctrl in self.controls.values():
             by_status[ctrl.status.value].append(asdict(ctrl))
 
+        total = len(self.controls)
+        done = (
+            len(by_status[ImplementationStatus.IMPLEMENTED.value])
+            + len(by_status[ImplementationStatus.VERIFIED.value])
+        )
+        coverage_percentage = round(100 * done / total, 1) if total else 0.0
+
         return {
-            "system_name": self.system_name,
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "total_controls": total,
+            "coverage_percentage": coverage_percentage,
             "summary": {s: len(entries) for s, entries in by_status.items()},
             "gaps": (
                 by_status[ImplementationStatus.NOT_STARTED.value]
                 + by_status[ImplementationStatus.IN_PROGRESS.value]
             ),
             "implemented": by_status[ImplementationStatus.IMPLEMENTED.value],
-            "not_applicable": by_status[ImplementationStatus.NOT_APPLICABLE.value],
+            "verified": by_status[ImplementationStatus.VERIFIED.value],
         }
 
-    def completion_percentage(self) -> float:
-        """Percentage of applicable controls that are IMPLEMENTED."""
-        applicable = [
-            c for c in self.controls.values()
-            if c.status != ImplementationStatus.NOT_APPLICABLE
-        ]
-        if not applicable:
-            return 0.0
-        implemented = sum(
-            1 for c in applicable if c.status == ImplementationStatus.IMPLEMENTED
-        )
-        return round(100 * implemented / len(applicable), 1)
-
-    def to_csv(self, path: Path) -> None:
-        """Export tracker state to CSV for audit trail handoff."""
-        with open(path, "w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(
-                fh,
-                fieldnames=[
-                    "subcategory_code", "description", "status",
-                    "evidence_reference", "owner", "target_date", "notes"
-                ],
-            )
-            writer.writeheader()
-            for ctrl in self.controls.values():
-                writer.writerow(asdict(ctrl))
+    def to_json(self, path: Optional[Path] = None) -> str:
+        """Export tracker state to JSON. Auditors get this file plus the artifact registry."""
+        payload = json.dumps({cid: asdict(c) for cid, c in self.controls.items()}, indent=2)
+        if path:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(payload, encoding="utf-8")
+        return payload
 
 
 # ---------------------------------------------------------------------------
-# 6. Dual-Framework Mapping Report Generator
+# 8. Dual-Framework Mapping Report Generator (section 10.6)
+# Listing 10.6
 # ---------------------------------------------------------------------------
 
-EU_NIST_CROSSWALK: List[Dict[str, str]] = [
-    {
-        "eu_article": "Article 9 — Risk Management",
-        "annex_iv_section": "§4 Validation & Testing",
-        "nist_function": "MANAGE",
-        "nist_subcategory": "MS-1.1",
-        "nist_description": "AI system risks are identified and assessed",
-        "compliance_notes": "Risk register + test evidence required for both frameworks",
-    },
-    {
-        "eu_article": "Article 10 — Data Governance",
-        "annex_iv_section": "§3 Training Data",
-        "nist_function": "MAP",
-        "nist_subcategory": "MP-2.1",
-        "nist_description": "Scientific findings used in AI design are identified",
-        "compliance_notes": "Data cards and provenance documentation satisfy both",
-    },
-    {
-        "eu_article": "Article 11 — Technical Documentation",
-        "annex_iv_section": "Full Annex IV",
-        "nist_function": "GOVERN",
-        "nist_subcategory": "GV-1.1",
-        "nist_description": "Policies and practices for TEVV",
-        "compliance_notes": "Annex IV YAML package maps directly to GV-1.1 evidence",
-    },
-    {
-        "eu_article": "Article 12 — Record Keeping",
-        "annex_iv_section": "§6 Post-Market",
-        "nist_function": "MANAGE",
-        "nist_subcategory": "MG-4.1",
-        "nist_description": "Post-deployment risks and benefits are monitored",
-        "compliance_notes": "TamperEvidentAuditLog satisfies both obligations",
-    },
-    {
-        "eu_article": "Article 13 — Transparency",
-        "annex_iv_section": "§1 General Description",
-        "nist_function": "GOVERN",
-        "nist_subcategory": "GV-1.2",
-        "nist_description": "Organizational commitment to AI risk governance",
-        "compliance_notes": "User-facing disclosure docs + internal governance charter",
-    },
-    {
-        "eu_article": "Article 14 — Human Oversight",
-        "annex_iv_section": "§4 Human Oversight Measures",
-        "nist_function": "MANAGE",
-        "nist_subcategory": "MG-2.2",
-        "nist_description": "Mechanisms to assess and adjust",
-        "compliance_notes": "Override capability and escalation paths documented",
-    },
-    {
-        "eu_article": "Article 15 — Accuracy / Robustness",
-        "annex_iv_section": "§5 Technical Standards",
-        "nist_function": "MEASURE",
-        "nist_subcategory": "MS-2.5",
-        "nist_description": "Rigorous testing before high-risk deployment",
-        "compliance_notes": "Benchmark suite + adversarial evaluation report",
-    },
-    {
-        "eu_article": "Article 72 — Post-Market Monitoring",
-        "annex_iv_section": "§6 Post-Market Plan",
-        "nist_function": "MANAGE",
-        "nist_subcategory": "MG-4.2",
-        "nist_description": "Evaluations used to make adjustments",
-        "compliance_notes": "PostMarketMonitoringReport dataclass + monthly cadence",
-    },
-]
+ANNEX_IV_TO_NIST_MAPPING: Dict[str, List[str]] = {
+    "1_general_description": ["Operational Risk", "Value Chain"],
+    "2_system_elements": ["Information Security", "Value Chain", "Environmental Risk"],
+    "3_monitoring_control": ["Operational Risk", "CBRN Content", "Human-AI Config"],
+    "4_risk_management": [
+        "Confabulation", "Data Privacy", "Harmful Bias",
+        "Data Disclosure", "Information Security", "Obscene Content",
+    ],
+    "5_lifecycle_changes": ["Operational Risk", "Value Chain"],
+    "6_conformity_assessment": ["Information Security", "Human-AI Config"],
+}
+
+# Practical "ready for initial audit" threshold, not a legal standard.
+# Adjust per your organization's risk posture (see section 10.6).
+DUAL_FRAMEWORK_COMPLIANT_THRESHOLD = 0.80  # 80% NIST coverage
+
+
+@dataclass
+class DualFrameworkReport:
+    system_name: str
+    system_version: str
+    annex_iv_completeness: dict
+    nist_coverage: dict
+    cross_references: dict
+    generated_at: str
 
 
 def generate_dual_framework_report(
-    package: AnnexIVPackage,
-    tracker: NISTAI6001Tracker,
-    output_path: Optional[Path] = None,
-) -> Dict[str, Any]:
-    """
-    Generate a combined EU AI Act + NIST AI RMF compliance report.
+    annex_iv_package: AnnexIVPackage,
+    nist_tracker: NISTAI6001Tracker,
+    output_path: str,
+) -> str:
+    """Produces a single integrated compliance report for EU AI Act + NIST AI RMF."""
+    annex_completeness = annex_iv_package.completeness_score()
+    nist_gap = nist_tracker.gap_report()
 
-    Parameters
-    ----------
-    package : AnnexIVPackage
-        The Annex IV documentation bundle.
-    tracker : NISTAI6001Tracker
-        The NIST control tracker for the same system.
-    output_path : Path, optional
-        If provided, write the report as JSON to this path.
+    coverage_fraction = nist_gap["coverage_percentage"] / 100
+    # Engineering threshold only — never surface this as a legal determination.
+    overall_status = (
+        "COMPLIANT"
+        if annex_completeness >= 1.0 and coverage_fraction >= DUAL_FRAMEWORK_COMPLIANT_THRESHOLD
+        else "IN_PROGRESS"
+    )
 
-    Returns
-    -------
-    dict with keys: metadata, annex_iv_status, nist_status, crosswalk, recommendations
-    """
-    nist_gap = tracker.gap_report()
-    annex_score = package.completeness_score()
-    missing = package.missing_required_fields()
-
-    recommendations: List[str] = []
-    if missing:
-        recommendations.append(
-            f"Complete {len(missing)} missing Annex IV fields before deployment: {missing}"
-        )
-    for gap_ctrl in nist_gap["gaps"]:
-        recommendations.append(
-            f"NIST {gap_ctrl['subcategory_code']} ({gap_ctrl['status']}): "
-            f"{gap_ctrl['description']}"
-        )
-
-    report = {
-        "metadata": {
-            "system_name": package.system_name,
-            "system_version": package.system_version,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "report_version": "1.0",
+    report = DualFrameworkReport(
+        system_name=annex_iv_package.system_name,
+        system_version=annex_iv_package.system_version,
+        annex_iv_completeness={
+            "score": annex_completeness,
+            "missing_required_fields": annex_iv_package.missing_required_fields(),
+            "missing_or_stale_artifacts": annex_iv_package.missing_or_stale_artifacts(),
         },
-        "annex_iv_status": {
-            "completeness_score": annex_score,
-            "passes_ci_gate": annex_score >= ANNEX_IV_CI_THRESHOLD,
-            "missing_required_fields": missing,
-        },
-        "nist_status": {
-            "completion_percentage": tracker.completion_percentage(),
-            "summary": nist_gap["summary"],
-            "gap_count": len(nist_gap["gaps"]),
-        },
-        "crosswalk": EU_NIST_CROSSWALK,
-        "recommendations": recommendations,
-    }
+        nist_coverage=nist_gap,
+        cross_references=ANNEX_IV_TO_NIST_MAPPING,
+        generated_at=datetime.now(timezone.utc).isoformat(),
+    )
 
-    if output_path:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as fh:
-            json.dump(report, fh, indent=2)
-        print(f"[DualFramework] Report written to {output_path}")
+    payload = asdict(report)
+    payload["overall_status"] = overall_status
 
-    return report
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return json.dumps(payload, indent=2)
 
 
 # ---------------------------------------------------------------------------
-# 7. PostMarketMonitoringReport
+# 9. PostMarketMonitoringReport (section 10.7.4)
+# Listing 10.8c
 # ---------------------------------------------------------------------------
-
-@dataclass
-class MetricSnapshot:
-    """A single metric measurement at a point in time."""
-    metric_name: str
-    value: float
-    unit: str
-    threshold: float
-    breached: bool = field(init=False)
-    timestamp_utc: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
-    def __post_init__(self) -> None:
-        self.breached = self.value > self.threshold
-
 
 @dataclass
 class PostMarketMonitoringReport:
-    """
-    Article 72 EU AI Act — Post-Market Monitoring report.
-
-    Covers performance drift, incident counts, user complaints, bias signals,
-    and remediation actions taken since the last reporting period.
-    """
+    """EU AI Act post-market monitoring report for a deployment period."""
     system_name: str
     system_version: str
     reporting_period_start: str
     reporting_period_end: str
-    report_author: str
+    total_queries: int
+    hallucination_rate: float
+    pii_detection_rate: float
+    bias_gap_max: float
+    incidents_p0: int
+    incidents_p1: int
+    incidents_p2: int
+    serious_incidents_reported: int     # P0 incidents reported to authority
+    monitoring_metrics: list = field(default_factory=list)
+    trend_alerts: list = field(default_factory=list)
 
-    # Core monitoring data
-    total_requests: int = 0
-    flagged_outputs: int = 0
-    user_complaints: int = 0
-    serious_incidents: int = 0       # EU AI Act Article 73 threshold
-    near_miss_incidents: int = 0
-    metric_snapshots: List[MetricSnapshot] = field(default_factory=list)
+    def requires_regulatory_notification(self) -> bool:
+        """True if any P0 incidents occurred that require Article 73 notification."""
+        return self.incidents_p0 > 0
 
-    # Drift and bias
-    accuracy_drift_pct: float = 0.0  # positive = degradation
-    bias_signal_triggered: bool = False
-    bias_signal_details: str = ""
-
-    # Remediation
-    model_updated: bool = False
-    guardrails_updated: bool = False
-    remediation_actions: List[str] = field(default_factory=list)
-
-    # Metadata
-    generated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    next_report_due: str = ""
-
-    def flagged_rate(self) -> float:
-        """Fraction of requests that produced flagged outputs."""
-        if self.total_requests == 0:
-            return 0.0
-        return round(self.flagged_outputs / self.total_requests, 6)
-
-    def requires_notified_body_report(self) -> bool:
-        """
-        EU AI Act Article 73: serious incidents affecting health/safety/rights
-        require notification to the market surveillance authority.
-        Threshold: any serious_incidents > 0.
-        """
-        return self.serious_incidents > 0
-
-    def add_metric(
-        self,
-        metric_name: str,
-        value: float,
-        unit: str,
-        threshold: float,
-    ) -> MetricSnapshot:
-        snap = MetricSnapshot(metric_name=metric_name, value=value, unit=unit, threshold=threshold)
-        self.metric_snapshots.append(snap)
-        return snap
-
-    def breached_metrics(self) -> List[MetricSnapshot]:
-        return [m for m in self.metric_snapshots if m.breached]
-
-    def to_dict(self) -> Dict[str, Any]:
-        d = asdict(self)
-        d["flagged_rate"] = self.flagged_rate()
-        d["requires_notified_body_report"] = self.requires_notified_body_report()
-        d["breached_metric_count"] = len(self.breached_metrics())
-        return d
-
-    def to_json(self, path: Optional[Path] = None) -> str:
-        payload = json.dumps(self.to_dict(), indent=2)
+    def to_json(self, path: str) -> str:
+        data = {
+            "monitoring_report": {
+                "system": self.system_name,
+                "version": self.system_version,
+                "period": {
+                    "start": self.reporting_period_start,
+                    "end": self.reporting_period_end,
+                },
+                "traffic": {"total_queries": self.total_queries},
+                "quality_metrics": {
+                    "hallucination_rate": self.hallucination_rate,
+                    "pii_detection_rate": self.pii_detection_rate,
+                    "bias_gap_max": self.bias_gap_max,
+                },
+                "incidents": {
+                    "p0": self.incidents_p0,
+                    "p1": self.incidents_p1,
+                    "p2": self.incidents_p2,
+                    "serious_incidents_reported": self.serious_incidents_reported,
+                },
+                "monitoring_metrics": self.monitoring_metrics,
+                "trend_alerts": self.trend_alerts,
+                "requires_regulatory_notification": self.requires_regulatory_notification(),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        }
+        result = json.dumps(data, indent=2)
         if path:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(payload, encoding="utf-8")
-        return payload
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(result, encoding="utf-8")
+        return result
+
+
+# ---------------------------------------------------------------------------
+# 10. CI/CD Annex IV completeness gate (section 10.9, merge-blocking signal #10)
+# Listing 10.10
+# ---------------------------------------------------------------------------
+
+def annex_iv_ci_gate(
+    annex_iv_package_path: str,
+    current_model_version: str,
+    max_artifact_age_days: int = 30,
+) -> bool:
+    """
+    Blocks deployment if:
+    1. Annex IV package is missing or incomplete
+    2. Package references a different model version
+    3. Evaluation artifacts are older than max_artifact_age_days
+    """
+    if not Path(annex_iv_package_path).exists():
+        print(f"ANNEX IV GATE FAILED: Package not found at {annex_iv_package_path}")
+        sys.exit(1)
+
+    package = json.loads(Path(annex_iv_package_path).read_text())
+    failures = []
+
+    # Check 1: Model version matches current deployment
+    if package.get("system_version") != current_model_version:
+        failures.append(
+            f"Package version '{package.get('system_version')}' "
+            f"!= current version '{current_model_version}'"
+        )
+
+    # Check 2: Required fields present
+    missing = [f for f in ANNEX_IV_REQUIRED_FIELDS if not package.get(f)]
+    if missing:
+        failures.append(f"Missing required fields: {missing}")
+
+    # Check 3: Referenced artifacts exist on disk and aren't stale
+    now = time.time()
+    for artifact_field in ANNEX_IV_ARTIFACT_PATH_FIELDS:
+        artifact_path = package.get(artifact_field, "")
+        if not artifact_path or not Path(artifact_path).exists():
+            failures.append(f"Artifact not found on disk: {artifact_field}")
+            continue
+        age_days = (now - os.path.getmtime(artifact_path)) / 86400
+        if age_days > max_artifact_age_days:
+            failures.append(
+                f"Artifact stale: {artifact_field} is {age_days:.1f} days old "
+                f"(max {max_artifact_age_days})"
+            )
+
+    if failures:
+        print(f"ANNEX IV GATE FAILED for {annex_iv_package_path}:")
+        for f in failures:
+            print(f"  - {f}")
+        sys.exit(1)
+
+    print(f"ANNEX IV GATE PASSED: {annex_iv_package_path} matches version {current_model_version}.")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -844,127 +821,155 @@ if __name__ == "__main__":
     import tempfile
 
     print("=" * 70)
-    print("Chapter 11 — EU AI Act + NIST AI RMF Compliance Demo")
+    print("Chapter 10 — EU AI Act + NIST AI RMF Compliance Demo")
     print("=" * 70)
 
-    # --- 1. Build a partially complete Annex IV package ---
-    pkg = AnnexIVPackage(
-        system_name="CustomerCareBot",
-        system_version="2.1.0",
-        intended_purpose="Automated tier-1 customer support for retail banking",
-        risk_category="high",
-        provider_name="Acme Financial AI Ltd.",
-        provider_address="123 Innovation Drive, Dublin, Ireland",
-        contact_email="ai-compliance@acme.example",
-        general_description=(
-            "GPT-4-based chat assistant handling account queries, "
-            "dispute initiation, and product information for retail customers."
-        ),
-        design_specifications="See design-spec-v2.1.pdf in the compliance vault.",
-        training_data_summary="Fine-tuned on 2.3M anonymized support transcripts (2021-2023).",
-        validation_testing="See evaluation-report-v2.1.pdf; accuracy 91.4% on holdout set.",
-        technical_standards="ISO/IEC 42001:2023, EN 301 549",
-        post_market_plan="Monthly drift monitoring; quarterly bias audit; annual red-team exercise.",
-        human_oversight_measures="Agents can escalate any conversation; override available at all times.",
-        accuracy_metrics="F1=0.914 on intent classification; BLEU=0.71 on generative responses.",
-        robustness_measures="Adversarial prompt testing quarterly; input length limits enforced.",
-        cybersecurity_measures="OWASP LLM Top 10 mitigations applied; rate limiting; PII scrubbing.",
-        declaration_of_conformity="DoC-CCBOT-2024-001 signed by Chief Compliance Officer.",
-    )
-    print(f"\nAnnex IV completeness: {pkg.completeness_score():.2%}")
-    print(f"Missing required fields: {pkg.missing_required_fields()}")
+    with tempfile.TemporaryDirectory(prefix="ch10_demo_") as tmpdir:
+        tmp = Path(tmpdir)
 
-    # --- 2. Run CI gate ---
-    print("\n--- Annex IV CI Gate ---")
-    run_annex_iv_ci_gate(pkg, strict=False)
+        # --- 0. Seed placeholder artifact files the index/package check for ---
+        for name in (
+            "red-team-report.pdf", "bias-assessment.md",
+            "evaluation-results.json", "adversarial-robustness.json",
+        ):
+            (tmp / name).write_text("placeholder artifact content")
 
-    # --- 3. Provenance recorder ---
-    print("\n--- Output Provenance Recorder ---")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        recorder = OutputProvenanceRecorder(Path(tmpdir) / "provenance.jsonl")
-        rec = recorder.record(
-            prompt="What is my account balance?",
-            output="Your current balance is €1,240.00.",
+        # --- 1. Annex IV artifact index (Listing 10.0) ---
+        print("\n--- Annex IV Artifact Index ---")
+        deployment_config = {
+            "red_team_report_path": str(tmp / "red-team-report.pdf"),
+            "evaluation_results_path": str(tmp / "evaluation-results.json"),
+        }
+        index = generate_annex_iv_index(deployment_config)
+        print(f"Ready for audit: {index['ready_for_audit']}")
+        print(f"Sections with gaps: {index['sections_with_gaps']}")
+
+        # --- 2. Build a complete Annex IV package (Listing 10.1) ---
+        pkg = AnnexIVPackage(
+            system_name="CustomerCareBot",
+            system_version="2.1.0",
+            intended_purpose="Automated tier-1 customer support for retail banking",
+            deployment_date="2026-01-15",
+            operator_name="Acme Financial AI Ltd.",
+            model_family="GPT-4",
+            model_version="2024-08-06",
+            training_data_description="Fine-tuned on 2.3M anonymized support transcripts (2021-2023).",
+            architecture_description="RAG pipeline over policy documents with a GPT-4 generation layer.",
+            components=["retrieval-service", "generation-service", "guardrail-filter"],
+            monitoring_metrics=["hallucination_rate", "pii_detection_rate", "latency_p99"],
+            alert_thresholds={"hallucination_rate": 0.05, "pii_detection_rate": 0.01},
+            human_oversight_design="Agents can escalate any conversation; override available at all times.",
+            risk_categories_addressed=["Confabulation", "Data Privacy", "Human-AI Config"],
+            red_team_report_path=str(tmp / "red-team-report.pdf"),
+            bias_assessment_path=str(tmp / "bias-assessment.md"),
+            adversarial_robustness_path=str(tmp / "adversarial-robustness.json"),
+            evaluation_results_path=str(tmp / "evaluation-results.json"),
+        )
+        print(f"\nAnnex IV completeness: {pkg.completeness_score():.2%}")
+        print(f"Missing required fields: {pkg.missing_required_fields()}")
+
+        # --- 3. Run CI gate (Listing 10.2) ---
+        print("\n--- Annex IV CI Gate ---")
+        package_path = tmp / "annex-iv-package.json"
+        pkg.to_json(package_path)
+        check_annex_iv_completeness(str(package_path))
+
+        # --- 3b. Merge-blocking CI/CD gate with version + freshness checks (Listing 10.10) ---
+        print("\n--- Annex IV CI/CD Merge Gate ---")
+        annex_iv_ci_gate(str(package_path), current_model_version=pkg.system_version)
+
+        # --- 4. Output provenance recorder (Listing 10.3) ---
+        print("\n--- Output Provenance Recorder ---")
+        record = create_provenance_record(
             model_id="gpt-4o",
             model_version="2024-08-06",
-            temperature=0.0,
-            max_tokens=256,
-            system_prompt_version="v3.1",
-            user_id="u-42",
+            prompt_template_version="v3.1",
             session_id="sess-abc123",
+            user_input="What is my account balance?",
+            model_output="Your current balance is EUR 1,240.00.",
+            signing_key=b"dev-only-signing-key",
         )
-        print(f"Provenance record ID: {rec.record_id}")
-        print(f"Signature valid: {rec.verify()}")
+        print(f"Provenance record ID: {record.record_id}")
+        print(f"Signature valid: {verify_provenance_record(record, signing_key=b'dev-only-signing-key')}")
+        record.output_hash = "tampered_hash"
+        print(
+            "Signature valid after tamper: "
+            f"{verify_provenance_record(record, signing_key=b'dev-only-signing-key')}"
+        )
 
-        # Demonstrate tamper detection
-        rec.output_hash = "tampered_hash"
-        print(f"Signature valid after tamper: {rec.verify()}")
-
-    # --- 4. TamperEvidentAuditLog ---
-    print("\n--- Tamper-Evident Audit Log ---")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        log = TamperEvidentAuditLog(Path(tmpdir) / "audit.jsonl")
+        # --- 5. TamperEvidentAuditLog (Listing 10.4) ---
+        print("\n--- Tamper-Evident Audit Log ---")
+        log = TamperEvidentAuditLog(str(tmp / "audit.jsonl"))
         log.append("model_deployment", {"version": "2.1.0", "deployed_by": "mlops-pipeline"})
         log.append("policy_update", {"policy": "rate_limit", "new_value": 100})
         log.append("incident_detected", {"severity": "low", "description": "Unusual prompt pattern"})
-        print(f"Entries written: {log._seq}")
-        log.verify_integrity()
+        print(f"Integrity check: {log.verify_integrity()}")
 
-    # --- 5. NIST AI 600-1 Tracker ---
-    print("\n--- NIST AI 600-1 Tracker ---")
-    tracker = NISTAI6001Tracker("CustomerCareBot")
-    tracker.update("GV-1.1", ImplementationStatus.IMPLEMENTED,
-                   evidence_reference="governance-policy-v3.pdf", owner="AI Governance Team")
-    tracker.update("GV-1.2", ImplementationStatus.IMPLEMENTED,
-                   evidence_reference="board-charter.pdf", owner="CTO Office")
-    tracker.update("MS-1.1", ImplementationStatus.IN_PROGRESS,
-                   owner="Risk Team", target_date="2024-09-30")
-    tracker.update("MS-2.6", ImplementationStatus.NOT_STARTED,
-                   owner="ML Engineering", target_date="2024-10-31")
-    tracker.update("MG-4.1", ImplementationStatus.IMPLEMENTED,
-                   evidence_reference="monitoring-runbook-v2.pdf", owner="MLOps Team")
-    gap = tracker.gap_report()
-    print(f"Completion: {tracker.completion_percentage()}%")
-    print(f"Summary: {gap['summary']}")
-    print(f"Gap count: {len(gap['gaps'])}")
+        # --- 6. NIST AI 600-1 triage report (Listing 10.4b) ---
+        print("\n--- NIST AI 600-1 Triage Report ---")
+        triage = NistTriageReport(deployment_type="rag", risk_level="high")
+        triage.add_action(NistAction(
+            action_id="output-validation-1", cluster="Output validation",
+            description="Maintain a golden evaluation dataset",
+            engineering_artifact="Golden eval dataset + CI job",
+            book_reference="Ch 2",
+        ))
+        triage.add_action(NistAction(
+            action_id="human-oversight-1", cluster="Human oversight design",
+            description="Build a kill switch reachable within five minutes",
+            engineering_artifact="Kill switch + on-call runbook",
+            book_reference="Section 10.3.1",
+        ))
+        triage.mark_implemented("output-validation-1", evidence_path=str(tmp / "evaluation-results.json"))
+        gap_summary = triage.gap_summary()
+        print(f"Implemented: {gap_summary['implemented_count']}/{gap_summary['total_actions']}")
+        print(f"Gaps: {[g['action_id'] for g in gap_summary['gaps']]}")
 
-    # --- 6. Dual-framework mapping report ---
-    print("\n--- Dual-Framework Mapping Report ---")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        report = generate_dual_framework_report(
-            pkg, tracker, output_path=Path(tmpdir) / "compliance-report.json"
+        # --- 7. NIST AI 600-1 control tracker (Listing 10.5) ---
+        print("\n--- NIST AI 600-1 Control Tracker ---")
+        tracker = NISTAI6001Tracker()
+        tracker.add_control(NISTControl(control_id="GV-1.1", risk_category="Govern",
+                                         description="Policies for organizational TEVV"))
+        tracker.add_control(NISTControl(control_id="MS-1.1", risk_category="Measure",
+                                         description="AI system risks are identified and assessed"))
+        tracker.add_control(NISTControl(control_id="MG-4.1", risk_category="Manage",
+                                         description="Post-deployment risks are monitored"))
+        tracker.update_status("GV-1.1", ImplementationStatus.VERIFIED,
+                               owner="AI Governance Team", evidence_path="governance-policy-v3.pdf")
+        tracker.update_status("MS-1.1", ImplementationStatus.IN_PROGRESS, owner="Risk Team")
+        gap = tracker.gap_report()
+        print(f"Coverage: {gap['coverage_percentage']}%")
+        print(f"Summary: {gap['summary']}")
+
+        # --- 8. Dual-framework mapping report (Listing 10.6) ---
+        print("\n--- Dual-Framework Mapping Report ---")
+        dual_report_path = tmp / "compliance-report.json"
+        dual_json = generate_dual_framework_report(pkg, tracker, str(dual_report_path))
+        dual_report = json.loads(dual_json)
+        print(f"Overall status: {dual_report['overall_status']}")
+        print(f"NIST coverage: {dual_report['nist_coverage']['coverage_percentage']}%")
+
+        # --- 9. PostMarketMonitoringReport (Listing 10.8c) ---
+        print("\n--- Post-Market Monitoring Report ---")
+        pmm = PostMarketMonitoringReport(
+            system_name="CustomerCareBot",
+            system_version="2.1.0",
+            reporting_period_start="2026-07-01",
+            reporting_period_end="2026-07-31",
+            total_queries=148_320,
+            hallucination_rate=0.031,
+            pii_detection_rate=0.004,
+            bias_gap_max=0.06,
+            incidents_p0=0,
+            incidents_p1=1,
+            incidents_p2=3,
+            serious_incidents_reported=0,
+            trend_alerts=["hallucination rate stable over trailing 30 days"],
         )
-        print(f"Annex IV passes CI gate: {report['annex_iv_status']['passes_ci_gate']}")
-        print(f"NIST completion: {report['nist_status']['completion_percentage']}%")
-        print(f"Recommendations: {len(report['recommendations'])}")
-
-    # --- 7. PostMarketMonitoringReport ---
-    print("\n--- Post-Market Monitoring Report ---")
-    pmm = PostMarketMonitoringReport(
-        system_name="CustomerCareBot",
-        system_version="2.1.0",
-        reporting_period_start="2024-07-01",
-        reporting_period_end="2024-07-31",
-        report_author="AI Risk Lead",
-        total_requests=148_320,
-        flagged_outputs=412,
-        user_complaints=17,
-        serious_incidents=0,
-        near_miss_incidents=3,
-        accuracy_drift_pct=0.8,
-        bias_signal_triggered=False,
-        remediation_actions=["Prompt injection filter threshold tightened on 2024-07-14"],
-        next_report_due="2024-08-31",
-    )
-    pmm.add_metric("hallucination_rate", 0.031, "fraction", threshold=0.05)
-    pmm.add_metric("avg_latency_p99_ms", 1840.0, "ms", threshold=2000.0)
-    pmm.add_metric("refusal_rate", 0.0027, "fraction", threshold=0.01)
-    print(f"Flagged rate: {pmm.flagged_rate():.4%}")
-    print(f"Breached metrics: {[m.metric_name for m in pmm.breached_metrics()]}")
-    print(f"Requires notified body report: {pmm.requires_notified_body_report()}")
+        print(f"Requires regulatory notification: {pmm.requires_regulatory_notification()}")
 
     print("\n" + "=" * 70)
-    print("All Chapter 11 components demonstrated successfully.")
+    print("All Chapter 10 components demonstrated successfully.")
     print("=" * 70)
 
 
@@ -1427,7 +1432,7 @@ class IncidentClassifier:
 
     P2 (Medium, 24h SLA): anomalous telemetry without confirmed scope violation
         or irreversible action.  CUSUM alert alone, or cognitive degradation
-        Level 1–2 without an accompanying tripwire, maps here.
+        Level 1-2 without an accompanying tripwire, maps here.
 
     No incident: no tripwire, no CUSUM alert, no degradation signal.
     """

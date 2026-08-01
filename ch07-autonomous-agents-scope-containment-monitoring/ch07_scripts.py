@@ -1,5 +1,5 @@
 """
-Hardening LLM Systems in Production — Chapter 8
+Hardening LLM Systems in Production — Chapter 7
 Autonomous Agents: Scope, Containment, Telemetry, and Anomaly Detection
 
 Companion script for Manning publication by Rudrendu Paul.
@@ -36,7 +36,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum, IntEnum, auto
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -48,6 +48,7 @@ log = logging.getLogger(__name__)
 
 # ===========================================================================
 # 1. MCP Tool Allowlist Enforcer with SHA-256 Hash Pinning
+# Listing 7.1: MCP tool allowlist enforcer
 # ===========================================================================
 
 class MCPToolAllowlistEnforcer:
@@ -131,6 +132,7 @@ class MCPToolAllowlistEnforcer:
 
 # ===========================================================================
 # 2. MCP Tool Description Validator — Injection Regex Detection
+# Listing 7.2: MCP tool description validator with injection pattern detection
 # ===========================================================================
 
 # Patterns known to appear in prompt-injection attacks embedded in tool
@@ -204,26 +206,47 @@ def validate_tool_registry(registry: List[Dict[str, Any]]) -> Tuple[List[str], L
 
 # ===========================================================================
 # 3. Trust-Level Wrapper for Multi-Agent Message Passing
+# Listing 7.3: Trust-level wrapper for multi-agent message passing
 # ===========================================================================
 
-class TrustLevel(Enum):
+class TrustLevel(IntEnum):
     """
-    Hierarchical trust levels for messages flowing between agents.
+    Hierarchical trust levels for messages flowing between agents and
+    across system boundaries. Trust is enforced by ordinal value:
+    SYSTEM (3) > AGENT (2) > EXTERNAL (1). Trust levels are assigned at
+    message origin and can only be downgraded — never upgraded — as a
+    message crosses an external boundary.
 
     SYSTEM   — orchestrator-level; full access; cannot be spoofed by peers.
-    OPERATOR — validated human-in-the-loop operator; elevated but audited.
-    AGENT    — peer agent output; treated as external data, never instructions.
-    USER     — end-user input; lowest privilege; full input sanitisation.
+    AGENT    — peer agent output within the same pipeline.
+    EXTERNAL — content that has passed through an untrusted boundary
+               (end-user input, retrieved documents, third-party tool output).
     """
-    SYSTEM   = auto()
-    OPERATOR = auto()
-    AGENT    = auto()
-    USER     = auto()
+    SYSTEM = 3
+    AGENT = 2
+    EXTERNAL = 1
 
     def can_invoke_tool(self, required_level: "TrustLevel") -> bool:
         """Return True if this level meets or exceeds the required level."""
-        order = [TrustLevel.USER, TrustLevel.AGENT, TrustLevel.OPERATOR, TrustLevel.SYSTEM]
-        return order.index(self) >= order.index(required_level)
+        return self.value >= required_level.value
+
+    def downgrade_trust_at_boundary(self) -> "TrustLevel":
+        """
+        Return the trust level a message carries after crossing an
+        external boundary.
+
+        Any message that passes through an external system exits that
+        boundary with EXTERNAL trust regardless of its trust level before
+        the boundary — trust can only decrease as messages move outward.
+        """
+        return TrustLevel.EXTERNAL
+
+
+_PERMITTED_ACTIONS: Dict["TrustLevel", set] = {
+    TrustLevel.SYSTEM: {"read", "write", "irreversible", "outbound"},
+    TrustLevel.AGENT: {"read", "write"},
+    TrustLevel.EXTERNAL: {"read"},
+}
 
 
 @dataclass
@@ -258,7 +281,7 @@ class TrustLevelWrapper:
 
     Rules:
       - AGENT messages cannot carry tool-call instructions directly.
-      - USER messages are sanitised (stripped of potential injection chars).
+      - EXTERNAL messages are sanitised (stripped of potential injection chars).
       - SYSTEM messages require a shared secret HMAC (simplified here to a
         pre-shared key check for illustration purposes).
     """
@@ -271,8 +294,8 @@ class TrustLevelWrapper:
 
     def ingest(self, message: AgentMessage) -> AgentMessage:
         """Validate and sanitise an incoming message."""
-        if message.trust_level == TrustLevel.USER:
-            message = self._sanitise_user(message)
+        if message.trust_level == TrustLevel.EXTERNAL:
+            message = self._sanitise_external(message)
         elif message.trust_level == TrustLevel.AGENT:
             self._block_agent_instructions(message)
         elif message.trust_level == TrustLevel.SYSTEM:
@@ -280,10 +303,10 @@ class TrustLevelWrapper:
         self._log.append(message)
         return message
 
-    def _sanitise_user(self, msg: AgentMessage) -> AgentMessage:
+    def _sanitise_external(self, msg: AgentMessage) -> AgentMessage:
         clean = self.DANGEROUS_CHARS.sub("", msg.content)
         if clean != msg.content:
-            log.info("User message sanitised — removed dangerous chars.")
+            log.info("External message sanitised — removed dangerous chars.")
         return AgentMessage(
             sender_id=msg.sender_id,
             trust_level=msg.trust_level,
@@ -317,6 +340,7 @@ class TrustLevelWrapper:
 
 # ===========================================================================
 # 4. Scoped Credential Manager (AWS STS-style per-scope TTLs)
+# Listing 7.4: Scoped credential manager for tool calls
 # ===========================================================================
 
 @dataclass
@@ -403,6 +427,7 @@ class ScopedCredentialManager:
 
 # ===========================================================================
 # 5. Action Categorizer + Async Confirmation Gate
+# Listing 7.5: Action categorizer and confirmation gate for agents
 # ===========================================================================
 
 class ActionCategory(Enum):
@@ -505,6 +530,7 @@ class ConfirmationGate:
 
 # ===========================================================================
 # 6. Sandboxed Subprocess Executor with Resource Limits
+# Listing 7.6: Sandboxed tool executor using subprocess isolation
 # ===========================================================================
 
 @dataclass
@@ -590,14 +616,39 @@ class SandboxedSubprocessExecutor:
 
 # ===========================================================================
 # 7. Agent Approval Queue with asyncio Timeout
+# Listing 7.7: ApprovalRequest dataclass, human-readable formatter, and approval queue
 # ===========================================================================
 
 @dataclass
 class ApprovalRequest:
+    """
+    Structured representation of a proposed agent action awaiting human review.
+
+    A well-designed approval request surfaces four things a reviewer needs
+    to make an informed decision (section 7.8.1): the agent's stated goal,
+    the specific action in plain English, the predicted outcome, and the
+    fallback plan if the request is denied.
+    """
+    agent_goal: str = ""
+    tool_name: str = ""
+    tool_params: Dict[str, Any] = field(default_factory=dict)
+    plain_english_action: str = ""
+    predicted_outcome: str = ""
+    fallback_plan: str = ""
+    session_id: str = ""
+    agent_id: str = ""
     request_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    action: Optional[AgentAction] = None
-    reason: str = ""
     submitted_at: float = field(default_factory=time.time)
+
+    def format_for_reviewer(self) -> str:
+        """Render the four reviewer-facing fields as human-readable text."""
+        import textwrap
+        return textwrap.dedent(f"""\
+            Goal: {self.agent_goal}
+            Proposed action: {self.plain_english_action}
+            Predicted outcome: {self.predicted_outcome}
+            Fallback if denied: {self.fallback_plan}
+        """).strip()
 
 
 class AgentApprovalQueue:
@@ -619,7 +670,11 @@ class AgentApprovalQueue:
         loop = asyncio.get_event_loop()
         future: asyncio.Future = loop.create_future()
         self._queue[request.request_id] = (request, future)
-        log.warning("Approval request queued: [%s] %s", request.request_id, request.reason)
+        log.warning(
+            "Approval request queued: [%s] %s",
+            request.request_id,
+            request.plain_english_action or request.tool_name,
+        )
         try:
             return await asyncio.wait_for(future, timeout=self._timeout)
         except asyncio.TimeoutError:
@@ -643,7 +698,7 @@ class AgentApprovalQueue:
         return [
             {
                 "request_id": req_id,
-                "reason": req.reason,
+                "action": req.plain_english_action or req.tool_name,
                 "waiting_since": round(time.time() - req.submitted_at, 1),
             }
             for req_id, (req, fut) in self._queue.items()
@@ -653,8 +708,9 @@ class AgentApprovalQueue:
 
 # ===========================================================================
 # 8. Agent Scope Test Suite (pytest CI Gate)
+# Unit tests for listings 7.1-7.5 above; not itself a numbered chapter listing.
 # ===========================================================================
-# Run with: pytest ch08_scripts.py -v
+# Run with: pytest ch07_scripts.py -v
 
 def _make_web_search_schema() -> Dict[str, Any]:
     return {
@@ -717,11 +773,15 @@ class TestTrustLevelOrdering:
         for level in TrustLevel:
             assert TrustLevel.SYSTEM.can_invoke_tool(level)
 
-    def test_user_cannot_invoke_operator_tools(self) -> None:
-        assert not TrustLevel.USER.can_invoke_tool(TrustLevel.OPERATOR)
+    def test_external_cannot_invoke_agent_tools(self) -> None:
+        assert not TrustLevel.EXTERNAL.can_invoke_tool(TrustLevel.AGENT)
 
     def test_agent_cannot_invoke_system_tools(self) -> None:
         assert not TrustLevel.AGENT.can_invoke_tool(TrustLevel.SYSTEM)
+
+    def test_downgrade_at_boundary_always_yields_external(self) -> None:
+        for level in TrustLevel:
+            assert level.downgrade_trust_at_boundary() == TrustLevel.EXTERNAL
 
 
 class TestScopedCredentials:
@@ -774,7 +834,14 @@ async def _demo_approval_queue() -> None:
     queue = AgentApprovalQueue(timeout_s=3.0)
 
     action = categorize_action("delete_user", {"user_id": "u-12345"})
-    request = ApprovalRequest(action=action, reason="Agent requested user deletion.")
+    request = ApprovalRequest(
+        agent_goal="Clean up inactive user accounts older than 1 year.",
+        tool_name=action.tool_name,
+        tool_params=action.args,
+        plain_english_action="Delete user account u-12345 (inactive 400+ days).",
+        predicted_outcome="Account and associated records are permanently removed.",
+        fallback_plan="Leave the account in place and flag it for manual review next cycle.",
+    )
 
     async def auto_approve_after_delay() -> None:
         await asyncio.sleep(0.5)
@@ -787,7 +854,7 @@ async def _demo_approval_queue() -> None:
 
 
 if __name__ == "__main__":
-    print("=== Chapter 8: Autonomous Agents — Scope Containment ===\n")
+    print("=== Chapter 7: Autonomous Agents — Scope Containment ===\n")
 
     # 1. Allowlist enforcer
     print("--- MCP Allowlist Enforcer ---")
@@ -808,7 +875,7 @@ if __name__ == "__main__":
     # 3. Trust wrapper
     print("\n--- Trust Wrapper ---")
     wrapper = TrustLevelWrapper(system_secret="secret-123")
-    msg = AgentMessage("agent-1", TrustLevel.USER, "Hello, I need help with <script>alert(1)</script>")
+    msg = AgentMessage("agent-1", TrustLevel.EXTERNAL, "Hello, I need help with <script>alert(1)</script>")
     clean_msg = wrapper.ingest(msg)
     print("Sanitised content:", clean_msg.content)
 
@@ -843,8 +910,8 @@ if __name__ == "__main__":
     print("\n--- Approval Queue ---")
     asyncio.run(_demo_approval_queue())
 
-    print("\nAll Chapter 8 components initialized successfully.")
-    print("Run pytest ch08_scripts.py -v for the full CI gate test suite.")
+    print("\nAll Chapter 7 components initialized successfully.")
+    print("Run pytest ch07_scripts.py -v for the full CI gate test suite.")
 
 
 # ===========================================================================
@@ -853,7 +920,7 @@ if __name__ == "__main__":
 
 # ---------------------------------------------------------------------------
 # Section 7.11 — AgentMemoryValidator
-# Listing 7.15: Memory segment validator for long-context agents
+# Listing 7.12: Memory segment validator for long-context agents
 # Dependency: sentence-transformers==2.6.0
 # ---------------------------------------------------------------------------
 # pip install sentence-transformers==2.6.0 numpy
@@ -999,7 +1066,7 @@ class AgentMemoryValidator:
 
 # ---------------------------------------------------------------------------
 # Section 7.12 — AgentComplexityScorer
-# Listing 7.17: AgentComplexityScorer for cognitive degradation detection
+# Listing 7.13: AgentComplexityScorer for cognitive degradation detection
 # No external dependencies beyond Python standard library.
 # Designed to integrate with the same alert pipeline as AgentTripwireDetector
 # and CUSUMActionRateMonitor.
@@ -1189,8 +1256,11 @@ class AgentComplexityScorer:
 
 
 # ===========================================================================
-# === Listings 7.0, 7.3, 7.9-7.14, 7.18: Trifecta scorer, signed messages,
-#     telemetry decorators, tripwires, CUSUM, CI gate ===
+# === Listings 7.0, 7.8-7.11, 7.14: Trifecta scorer, telemetry decorators,
+#     tripwires, CUSUM, CI gate (plus supplementary A2A message signing,
+#     Langfuse session tracing, and tripwire threshold calibration helpers
+#     that are described in chapter prose but not printed as numbered
+#     listings) ===
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
@@ -1295,7 +1365,10 @@ def score_architecture(components: List[AgentComponent]) -> List[TrifectaScore]:
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.3: SignedAgentMessage — transport-layer trust for A2A communication
+# Supplementary (not a numbered chapter listing): SignedAgentMessage — transport-layer
+# trust for A2A communication. Implements the signed-metadata design described in prose
+# in section 7.5.1 (origin agent ID, task context ID, authorization scope). The chapter's
+# printed Listing 7.3 is the TrustLevel / TrustLevelWrapper code above (section 3).
 # Requirements: dataclasses (stdlib), hashlib (stdlib), hmac (stdlib)
 # ---------------------------------------------------------------------------
 
@@ -1384,7 +1457,7 @@ class SignedAgentMessage:
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.9: trace_agent_step — decorator for tracing LLM calls
+# Listing 7.8: trace_agent_step — decorator for tracing LLM calls
 # Requirements: opentelemetry-sdk==1.21.0
 # ---------------------------------------------------------------------------
 
@@ -1446,7 +1519,7 @@ def trace_agent_step(task_context_id: Optional[str] = None):
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.10: InstrumentedAgent — OpenTelemetry spans for agent planning and tool calls
+# Listing 7.9: InstrumentedAgent — OpenTelemetry spans for agent planning and tool calls
 # Requirements: opentelemetry-sdk==1.21.0, opentelemetry-exporter-otlp==1.21.0
 # ---------------------------------------------------------------------------
 
@@ -1512,7 +1585,10 @@ class InstrumentedAgent:
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.11: TracedAgentSession — Langfuse session-level tracing
+# Supplementary (not a numbered chapter listing): TracedAgentSession — Langfuse
+# session-level tracing. Implements the Langfuse session/trace/span design described
+# in prose in section 7.9.2. The chapter's printed Listing 7.11 is CUSUMActionRateMonitor
+# below.
 # Requirements: langfuse==2.28.0
 # ---------------------------------------------------------------------------
 
@@ -1610,7 +1686,10 @@ class TracedAgentSession:
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.12: calibrate_tripwire_threshold — empirical threshold calibration
+# Supplementary (not a numbered chapter listing): calibrate_tripwire_threshold —
+# empirical threshold calibration. Implements the calibration approach described in
+# prose in sections 7.10.1 and 7.10.2. The chapter's printed Listing 7.12 is
+# AgentMemoryValidator above (section 7.11).
 # Requirements: collections (stdlib)
 # ---------------------------------------------------------------------------
 
@@ -1667,7 +1746,7 @@ def calibrate_tripwire_threshold(
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.13: AgentTripwireDetector / TripwireEvent
+# Listing 7.10: AgentTripwireDetector / TripwireEvent
 # Requirements: collections (stdlib)
 # ---------------------------------------------------------------------------
 
@@ -1799,7 +1878,7 @@ class AgentTripwireDetector:
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.14: CUSUMActionRateMonitor — CUSUM for agentic action rate monitoring
+# Listing 7.11: CUSUMActionRateMonitor — CUSUM for agentic action rate monitoring
 # Requirements: collections (stdlib); numpy optional (uses pure-Python fallback)
 # ---------------------------------------------------------------------------
 
@@ -1891,7 +1970,7 @@ class CUSUMActionRateMonitor:
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.18: ScopeTestCase and unified agent CI/CD gate
+# Listing 7.14: ScopeTestCase and unified agent CI/CD gate
 # Requirements: pytest>=7.0.0,<9.0
 # ---------------------------------------------------------------------------
 
@@ -2088,3 +2167,50 @@ def test_agent_scope_and_telemetry(
     for msg in scope_failures + telemetry_failures:
         print(f"  - {msg}")
     return 1
+
+
+# This is the CI/CD gate function itself (Listing 7.14), not a pytest test case.
+# Its name starts with "test_" because that is the API the chapter teaches
+# (`sys.exit(test_agent_scope_and_telemetry(executor, trace))` in a CI job) --
+# but that name collides with pytest's default collection pattern, which then
+# tries to inject `agent_executor` as a fixture and errors out. Opt this
+# function out of collection explicitly rather than renaming the public API
+# the book refers to.
+test_agent_scope_and_telemetry.__test__ = False
+
+
+class TestAgentCIGate:
+    """
+    Exercises the Listing 7.14 gate function directly, the way a reader's own
+    CI test harness would (see the chapter exercise): supply an agent_executor
+    and a session trace, then assert on the returned exit code.
+    """
+
+    @staticmethod
+    def _clean_executor(_: str) -> List[str]:
+        return ["read_document"]
+
+    def test_gate_passes_clean_run_with_full_telemetry(self) -> None:
+        trace = {
+            "planning_spans": [{"step": "plan_summary"}],
+            "tripwire_events": [],
+            "cusum_state": {"baseline_rate": 0.4},
+        }
+        assert test_agent_scope_and_telemetry(self._clean_executor, trace) == 0
+
+    def test_gate_fails_on_missing_cusum_state(self) -> None:
+        trace = {
+            "planning_spans": [{"step": "plan_summary"}],
+            "tripwire_events": [],
+            # cusum_state deliberately omitted -- telemetry gap.
+        }
+        assert test_agent_scope_and_telemetry(self._clean_executor, trace) == 1
+
+
+# This is the CI/CD gate function itself (Listing 7.14), not a pytest test case.
+# Its name starts with "test_" because that is the API the chapter teaches
+# (`sys.exit(test_agent_scope_and_telemetry(executor, trace))` in a CI job) --
+# but that name collides with pytest's default collection pattern, which then
+# tries to inject `agent_executor` as a fixture. Opt this function out of
+# collection explicitly rather than renaming the public API the book refers to.
+test_agent_scope_and_telemetry.__test__ = False

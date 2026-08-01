@@ -1,5 +1,5 @@
 """
-Chapter 6: RAG and Retrieval Security: The Largest New Attack Surface
+Chapter 5: RAG and Retrieval Security: The Largest New Attack Surface
 Hardening LLM Systems in Production — Companion Code
 Author: Rudrendu Paul | https://orcid.org/0009-0008-0141-4690
 Requirements:
@@ -19,7 +19,7 @@ import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -78,7 +78,13 @@ class TenantScopedPineconeClient:
         """
         Query the index. Namespace is auto-scoped to tenant_id.
         Results are post-filtered to catch any namespace mis-routing.
+
+        Raises ValueError if tenant_id is empty or contains path traversal
+        characters — a malformed tenant_id must fail loudly rather than
+        silently deriving a namespace an attacker could collide with.
         """
+        if not tenant_id or "/" in tenant_id or ".." in tenant_id:
+            raise ValueError(f"Invalid tenant_id: {tenant_id!r}")
         namespace = self._tenant_namespace(tenant_id)
         index = self._get_index()
 
@@ -131,6 +137,48 @@ class TenantScopedPineconeClient:
 
         result = index.upsert(vectors=stamped, namespace=namespace)
         return result.get("upserted_count", 0)
+
+
+def get_embedding(text: str, model: str = "text-embedding-3-small") -> list[float]:
+    """
+    Return an embedding vector for the given text via the OpenAI embeddings API.
+    Lazy-imports openai so this module has no hard dependency on it.
+
+    Requires: pip install openai==1.30.0
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise RuntimeError("openai not installed. Run: pip install openai==1.30.0")
+    client = OpenAI()
+    response = client.embeddings.create(input=[text], model=model)
+    return response.data[0].embedding
+
+
+def query_tenant_documents(
+    index_name: str,
+    tenant_id: str,
+    query_text: str,
+    top_k: int = 5,
+    api_key: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """
+    Query a Pinecone index with strict tenant isolation (listing 5.1).
+
+    Isolation strategy:
+      1. Primary: namespace == tenant_id (hard partition, evaluated before ANN)
+      2. Secondary: metadata filter tenant_id == tenant_id (catches mislabeled docs)
+
+    Raises ValueError if tenant_id is empty or contains path traversal characters
+    (enforced inside TenantScopedPineconeClient.query).
+    """
+    import os
+
+    key = api_key or os.environ["PINECONE_API_KEY"]
+    client = TenantScopedPineconeClient(api_key=key, index_name=index_name)
+    query_vector = get_embedding(query_text)
+    result = client.query(tenant_id=tenant_id, query_vector=query_vector, top_k=top_k)
+    return [m.get("metadata", {}) for m in result.matches]
 
 
 # ---------------------------------------------------------------------------
@@ -319,8 +367,8 @@ class DefenseInDepthRetrievalPipeline:
     """
 
     INJECTION_PATTERNS = [
-        re.compile(r"ignore (previous|all) instructions", re.I),
-        re.compile(r"(system|developer) prompt", re.I),
+        re.compile(r"ignore (all |previous )*(all |previous )*instructions", re.I),
+        re.compile(r"(system|developer) (prompt|mode)", re.I),
         re.compile(r"\{\{.*?\}\}", re.S),
         re.compile(r"<(script|iframe|svg)[^>]*>", re.I),
     ]
@@ -412,6 +460,70 @@ class DefenseInDepthRetrievalPipeline:
         )
 
 
+# Intent classification: map known query topics to allowed document categories
+# (listing 5.4 — the reranking layer that sits on top of DefenseInDepthRetrievalPipeline)
+TOPIC_CATEGORY_MAP: dict[str, set[str]] = {
+    "billing": {"billing", "invoice", "payment"},
+    "support": {"support", "troubleshooting", "faq"},
+    "onboarding": {"onboarding", "setup", "configuration"},
+}
+
+
+def classify_query_intent(query_text: str) -> Optional[str]:
+    """
+    Classify query into a known topic using keyword matching.
+
+    Returns the topic name, or None if the query does not match a known topic.
+    Replace with a lightweight classifier for production use.
+    """
+    query_lower = query_text.lower()
+    for topic, keywords in TOPIC_CATEGORY_MAP.items():
+        if any(kw in query_lower for kw in keywords):
+            return topic
+    return None
+
+
+def secure_retrieve(
+    pinecone_client: TenantScopedPineconeClient,
+    anomaly_detector: EmbeddingAnomalyDetector,
+    tenant_id: str,
+    query_text: str,
+    query_embedding: list[float],
+    top_k: int = 5,
+) -> RetrievalPipelineResult:
+    """
+    Defense-in-depth retrieval pipeline (listing 5.4): namespace isolation,
+    embedding-anomaly detection, and injection scanning from
+    DefenseInDepthRetrievalPipeline, plus an intent-reranker pass that drops
+    documents whose 'source' metadata falls outside the classified query topic.
+
+    A similarity attack must defeat namespace isolation, the anomaly/injection
+    checks, and the intent reranker simultaneously to return unauthorized
+    documents.
+    """
+    pipeline = DefenseInDepthRetrievalPipeline(pinecone_client, anomaly_detector)
+    result = pipeline.retrieve(tenant_id, query_text, query_embedding, top_k=top_k)
+    if result.blocked:
+        return result
+
+    topic = classify_query_intent(query_text)
+    if topic is None:
+        return result  # no known topic to rerank against; pass through unchanged
+
+    allowed_sources = TOPIC_CATEGORY_MAP[topic]
+    reranked = [
+        doc for doc in result.documents
+        if doc.get("source") in allowed_sources or "source" not in doc
+    ]
+    return RetrievalPipelineResult(
+        documents=reranked,
+        blocked=result.blocked,
+        block_reason=result.block_reason,
+        anomaly_detected=result.anomaly_detected,
+        sanitized_count=result.sanitized_count,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 5. LangChain Sanitizing Document Loader
 # ---------------------------------------------------------------------------
@@ -451,6 +563,84 @@ def build_sanitizing_loader(file_path: str):
             return clean
 
     return SanitizingHTMLLoader(file_path)
+
+
+# Injection detection patterns (listing 5.5): extend with domain-specific patterns
+INJECTION_PATTERNS: list[re.Pattern] = [
+    re.compile(r"ignore\s+(your\s+)?previous\s+instructions", re.IGNORECASE),
+    re.compile(r"you\s+are\s+now\s+a", re.IGNORECASE),
+    re.compile(r"output\s+the\s+contents?\s+of\s+your\s+system\s+prompt", re.IGNORECASE),
+    re.compile(r"disregard\s+(all\s+)?prior\s+(instructions|context)", re.IGNORECASE),
+    re.compile(r"act\s+as\s+if\s+you\s+have\s+no\s+restrictions", re.IGNORECASE),
+    re.compile(r"jailbreak", re.IGNORECASE),
+    re.compile(r"DAN\s+mode", re.IGNORECASE),
+]
+
+REDACTION_PLACEHOLDER = "[REDACTED:INJECTION_PATTERN]"
+
+
+def strip_html(text: str) -> str:
+    """Remove all HTML tags and script content, return plain text."""
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        raise RuntimeError(
+            "beautifulsoup4 not installed. Run: pip install beautifulsoup4==4.12.3"
+        )
+    soup = BeautifulSoup(text, "html.parser")
+    for tag in soup(["script", "style", "iframe", "object"]):
+        tag.decompose()
+    return soup.get_text(separator=" ", strip=True)
+
+
+def detect_injection(text: str) -> list[str]:
+    """Return the list of injection pattern strings matched in text."""
+    return [pat.pattern for pat in INJECTION_PATTERNS if pat.search(text)]
+
+
+def _redact_injection(text: str) -> str:
+    for pat in INJECTION_PATTERNS:
+        text = pat.sub(REDACTION_PLACEHOLDER, text)
+    return text
+
+
+try:
+    from langchain_core.document_loaders import BaseLoader as _BaseLoader
+    from langchain_core.documents import Document as _LCDocument
+except ImportError:  # pragma: no cover - exercised only without langchain-core installed
+    _BaseLoader = object
+    _LCDocument = None
+
+
+class SanitizingDocumentLoader(_BaseLoader):
+    """
+    LangChain BaseLoader subclass (listing 5.5) that strips HTML, detects
+    injection patterns, and redacts flagged content before yielding
+    documents to the downstream ingestion pipeline.
+
+    Requires: pip install langchain-core==0.2.10, beautifulsoup4==4.12.3
+    """
+
+    def __init__(self, raw_documents: list[dict[str, Any]]) -> None:
+        if _LCDocument is None:
+            raise RuntimeError(
+                "langchain-core not installed. Run: pip install langchain-core==0.2.10"
+            )
+        self._raw_documents = raw_documents
+
+    def lazy_load(self):
+        for raw in self._raw_documents:
+            content = strip_html(raw.get("content", ""))
+            matched = detect_injection(content)
+            metadata = dict(raw.get("metadata", {}))
+            if matched:
+                metadata["injection_detected"] = True
+                metadata["injection_patterns"] = matched
+                content = _redact_injection(content)
+            yield _LCDocument(page_content=content, metadata=metadata)
+
+    def load(self) -> list[Any]:
+        return list(self.lazy_load())
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +700,219 @@ class CUSUMRetrievalAnomalyDetector:
         self._state = CUSUMState()
 
 
+@dataclass
+class CUSUMRetrievalMonitor:
+    """
+    CUSUM-based monitor for retrieval behavior anomalies (listing 5.7).
+
+    Monitors the fraction of cross-category retrievals per session and
+    raises an alert when the cumulative deviation exceeds the decision
+    threshold. Complements CUSUMRetrievalAnomalyDetector above, which
+    monitors raw similarity scores rather than a per-session
+    cross-category rate.
+
+    Parameters
+    ----------
+    target_fraction : float
+        Expected fraction of cross-category retrievals under normal operation.
+        Calibrate from baseline traffic; typically 0.05-0.15.
+    slack : float
+        Allowable deviation before CUSUM accumulates. Set to
+        (acceptable_shift / 2) from the target.
+    decision_threshold : float
+        CUSUM accumulator value that triggers an alert.
+    alert_log_path : str
+        Path to write JSONL alert records.
+    """
+
+    target_fraction: float = 0.10
+    slack: float = 0.05
+    decision_threshold: float = 5.0
+    alert_log_path: str = "retrieval_behavior_anomaly_log.jsonl"
+    _cusum: float = field(default=0.0, init=False)
+    sample_count: int = field(default=0, init=False)
+
+    def record_query(self, is_cross_category: bool) -> bool:
+        """Record one query's cross-category flag; return True if an alert fires."""
+        x = 1.0 if is_cross_category else 0.0
+        self._cusum = max(0.0, self._cusum + (x - self.target_fraction) - self.slack)
+        self.sample_count += 1
+        alert = self._cusum > self.decision_threshold
+        if alert:
+            self._cusum = 0.0
+        return alert
+
+    def reset(self) -> None:
+        self._cusum = 0.0
+        self.sample_count = 0
+
+
+# ---------------------------------------------------------------------------
+# 7. Agentic RAG Feedback-Loop Defense
+# ---------------------------------------------------------------------------
+
+# Reuse the detection patterns from chapter 4's injection pipeline
+FOLLOW_UP_QUERY_PATTERNS = [
+    re.compile(r"credential", re.IGNORECASE),
+    re.compile(r"internal\s+configuration", re.IGNORECASE),
+    re.compile(r"system\s+prompt", re.IGNORECASE),
+    re.compile(r"session\s+(token|context|key)", re.IGNORECASE),
+    re.compile(r"api\s+key", re.IGNORECASE),
+    re.compile(r"password", re.IGNORECASE),
+]
+
+MAX_RETRIEVAL_STEPS = 8  # cap the feedback loop depth
+
+
+def validate_followup_query(query: str) -> bool:
+    """
+    Validate a model-generated follow-up retrieval query (section 5.6.2).
+
+    Returns True if the query is safe to execute.
+    Returns False if it matches patterns suggesting steering by an injected document.
+    """
+    for pattern in FOLLOW_UP_QUERY_PATTERNS:
+        if pattern.search(query):
+            return False
+    return True
+
+
+@dataclass
+class AgenticRetrievalStep:
+    step: int
+    query: str
+    doc_ids: list[str]
+    blocked: bool
+    block_reason: str
+
+
+@dataclass
+class AgenticRetrievalTrace:
+    steps: list[AgenticRetrievalStep] = field(default_factory=list)
+    terminated_reason: str = "completed"
+
+
+def agentic_retrieve_with_loop_defense(
+    initial_query: str,
+    retrieve_fn: Callable[[str], list[dict[str, Any]]],
+    followup_query_fn: Optional[Callable[[list[dict[str, Any]]], Optional[str]]] = None,
+    max_steps: int = MAX_RETRIEVAL_STEPS,
+) -> AgenticRetrievalTrace:
+    """
+    Run an agentic retrieval loop with three defenses layered together
+    (section 5.6.2): a depth limit (MAX_RETRIEVAL_STEPS), follow-up query
+    validation (validate_followup_query), and duplicate-document loop
+    detection.
+
+    followup_query_fn receives the documents retrieved in the current step
+    and returns the next query to execute, or None to stop the loop. Every
+    step is recorded, so the returned trace is also the query-provenance
+    log referenced in section 5.6.4: which document produced which
+    follow-up query, and whether that query was blocked.
+    """
+    trace = AgenticRetrievalTrace()
+    seen_doc_ids: set[str] = set()
+    query = initial_query
+
+    for step in range(1, max_steps + 1):
+        if step > 1 and not validate_followup_query(query):
+            trace.steps.append(AgenticRetrievalStep(
+                step, query, [], True,
+                "Follow-up query blocked: sensitive-topic pattern matched",
+            ))
+            trace.terminated_reason = "blocked_query"
+            break
+
+        docs = retrieve_fn(query)
+        doc_ids = [str(d.get("doc_id", d.get("id", idx))) for idx, d in enumerate(docs)]
+
+        if seen_doc_ids.intersection(doc_ids):
+            trace.steps.append(AgenticRetrievalStep(
+                step, query, doc_ids, True,
+                "Retrieval loop detected: document already seen this session",
+            ))
+            trace.terminated_reason = "loop_detected"
+            break
+
+        seen_doc_ids.update(doc_ids)
+        trace.steps.append(AgenticRetrievalStep(step, query, doc_ids, False, ""))
+
+        if followup_query_fn is None:
+            trace.terminated_reason = "completed"
+            break
+        next_query = followup_query_fn(docs)
+        if next_query is None:
+            trace.terminated_reason = "completed"
+            break
+        query = next_query
+    else:
+        trace.terminated_reason = "max_steps_reached"
+
+    return trace
+
+
+# ---------------------------------------------------------------------------
+# 8. Haystack Injection Pattern Detector
+# ---------------------------------------------------------------------------
+
+# haystack-ai is optional: this module must import cleanly whether or not
+# it's installed. Only instantiating InjectionPatternDetector requires it.
+try:
+    from haystack import Document as _HaystackDocument, component as _haystack_component
+    _HAYSTACK_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised only without the optional dep
+    _HAYSTACK_AVAILABLE = False
+
+
+if _HAYSTACK_AVAILABLE:
+
+    @_haystack_component
+    class InjectionPatternDetector:
+        """
+        Haystack component (listing 5.6): scan document content for
+        injection patterns before indexing.
+
+        Reuses the same INJECTION_PATTERNS list and redaction logic as
+        SanitizingDocumentLoader (listing 5.5) — the detection rules are
+        framework-independent, only the wrapper differs. Documents with
+        detected patterns are flagged in metadata (injection_detected=True,
+        injection_patterns=[...]) and their injected content is replaced
+        with REDACTION_PLACEHOLDER. Documents without injections pass
+        through unchanged.
+
+        Requires: pip install haystack-ai==2.3.1
+        """
+
+        @_haystack_component.output_types(documents=list[_HaystackDocument])
+        def run(self, documents: list[_HaystackDocument]) -> dict[str, Any]:
+            cleaned = []
+            for doc in documents:
+                content = doc.content or ""
+                matched = detect_injection(content)
+                meta = dict(doc.meta)
+                if matched:
+                    meta["injection_detected"] = True
+                    meta["injection_patterns"] = matched
+                    content = _redact_injection(content)
+                cleaned.append(_HaystackDocument(content=content, meta=meta))
+            return {"documents": cleaned}
+
+else:  # pragma: no cover - exercised only without the optional dep
+
+    class InjectionPatternDetector:  # type: ignore[no-redef]
+        """
+        Placeholder used when haystack-ai is not installed. The module
+        still imports cleanly; only constructing this component requires
+        the optional dependency.
+        """
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise ImportError(
+                "haystack-ai is required for InjectionPatternDetector. "
+                "Install with: pip install haystack-ai==2.3.1"
+            )
+
+
 # ---------------------------------------------------------------------------
 # Entry Point
 # ---------------------------------------------------------------------------
@@ -517,7 +920,7 @@ class CUSUMRetrievalAnomalyDetector:
 if __name__ == "__main__":
     import json
 
-    print("=== Chapter 6: RAG and Retrieval Security: The Largest New Attack Surface — Demo ===\n")
+    print("=== Chapter 5: RAG and Retrieval Security: The Largest New Attack Surface — Demo ===\n")
 
     # 1. Embedding anomaly detector demo
     print("--- Embedding Anomaly Detector (Tukey Fence) ---")

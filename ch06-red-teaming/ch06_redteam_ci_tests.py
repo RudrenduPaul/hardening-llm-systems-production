@@ -1,7 +1,7 @@
 
-"""ch07_redteam_ci_tests.py — CI regression suite for Chapter 7 red-team pipeline."""
+"""ch06_redteam_ci_tests.py — CI regression suite for Chapter 6 red-team pipeline."""
 import pytest
-from ch07_scripts import (
+from ch06_scripts import (
     GarakFinding, GarakScanReport,
     PAIRResult,
     RedTeamFinding, SeverityLevel, FindingCategory,

@@ -6,21 +6,25 @@ Secure a Retrieval-Augmented Generation pipeline against namespace collision, cr
 
 | File | Description |
 |------|-------------|
-| [`ch05_notebook.ipynb`](ch05_notebook.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch05-rag-retrieval-security/ch05_notebook.ipynb) | Interactive notebook: namespace enforcement, provenance tagging, CUSUM anomaly detection |
-| [`ch05_scripts.py`](ch05_scripts.py) | `TenantNamespaceEnforcer`, `ProvenanceTaggedRetriever`, `CUSUMRetrievalMonitor` |
+| [`ch05_notebook.ipynb`](ch05_notebook.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch05-rag-retrieval-security/ch05_notebook.ipynb) | Interactive notebook: namespace enforcement, embedding anomaly detection, CUSUM monitoring |
+| [`ch05_scripts.py`](ch05_scripts.py) | `TenantScopedPineconeClient`, `EmbeddingAnomalyDetector`, `DefenseInDepthRetrievalPipeline`, `CUSUMRetrievalAnomalyDetector`, `CUSUMRetrievalMonitor`, `SanitizingDocumentLoader`, `InjectionPatternDetector` (Haystack) |
 
 ## What this chapter builds
 
-- **TenantNamespaceEnforcer** — SHA-256 deterministic namespace derivation; prevents tenant A from querying tenant B's vectors
-- **ProvenanceTaggedRetriever** — signs every document chunk at ingest time; verifies signature before context injection
-- **CUSUMRetrievalMonitor** — CUSUM change detection on per-tenant retrieval score distributions; alerts on poisoning attempts
+- **TenantScopedPineconeClient** — SHA-256 deterministic namespace derivation; prevents tenant A from querying tenant B's vectors, with a post-filter safety net
+- **EmbeddingAnomalyDetector** — Tukey-fence anomaly detection on query embedding L2 norm; flags adversarially crafted vectors
+- **DefenseInDepthRetrievalPipeline** / **secure_retrieve** — layers embedding-anomaly detection, injection scanning, tenant-scoped retrieval, sanitization, and intent reranking
+- **CUSUMRetrievalAnomalyDetector** / **CUSUMRetrievalMonitor** — CUSUM change detection on retrieval similarity scores and per-session cross-category rate; alerts on poisoning attempts
+- **SanitizingDocumentLoader** — strips HTML, detects injection patterns, and redacts flagged content before ingestion (LangChain)
+- **InjectionPatternDetector** — Haystack component wrapping the same detection/redaction logic as `SanitizingDocumentLoader`; `haystack-ai` is an optional import, so the module loads without it installed
+- **agentic_retrieve_with_loop_defense** — depth-limited, provenance-logged retrieval loop for agentic RAG
 - **StubPineconeClient** — in-memory Pinecone stub for offline testing and CI execution
-- **Retrieval security test suite** — auto-generated pytest file covering namespace bypass, signature tampering, score anomalies
+- **Retrieval security test suite** (`ch05_retrieval_security_tests.py`) — pytest file covering embedding anomaly detection, injection blocking, CUSUM alerting, and namespace isolation
 
 ## Prerequisites
 
 ```bash
-pip install numpy matplotlib pydantic>=2.0
+pip install "numpy>=1.26.0,<2.0" matplotlib pydantic>=2.0
 ```
 
 > **No live Pinecone required** — all notebook demos use the in-memory `StubPineconeClient`. Set `PINECONE_API_KEY` in `.env` for live execution.
