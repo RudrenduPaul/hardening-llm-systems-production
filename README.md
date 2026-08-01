@@ -1,12 +1,16 @@
-# Hardening LLM Systems in Production — Companion Code
+# Hardening LLM Systems in Production: Companion Code
 
-[![Companion Code Tests — Python 3.10](https://github.com/RudrenduPaul/hardening-llm-systems-production/actions/workflows/test-notebooks.yml/badge.svg?branch=main&label=Python%203.10)](https://github.com/RudrenduPaul/hardening-llm-systems-production/actions/workflows/test-notebooks.yml)
-[![Companion Code Tests — Python 3.11](https://github.com/RudrenduPaul/hardening-llm-systems-production/actions/workflows/test-notebooks.yml/badge.svg?branch=main&label=Python%203.11)](https://github.com/RudrenduPaul/hardening-llm-systems-production/actions/workflows/test-notebooks.yml)
+[![CI](https://github.com/RudrenduPaul/hardening-llm-systems-production/actions/workflows/test-notebooks.yml/badge.svg?branch=main)](https://github.com/RudrenduPaul/hardening-llm-systems-production/actions/workflows/test-notebooks.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](requirements.txt)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Publisher](https://img.shields.io/badge/Publisher-Manning%20Publications-CC0000.svg)](https://www.manning.com)
 
-**Book**: *Hardening LLM Systems in Production: An Engineer's Playbook for Hallucinations, Prompt Injection, RAG Security, Agent Containment, and EU AI Act Compliance*
-**Author**: Rudrendu Paul | [ORCID](https://orcid.org/0009-0008-0141-4690) | [LinkedIn](https://www.linkedin.com/in/rudrendupaul/)
-**Co-author**: Sourav Nandy | [LinkedIn](https://www.linkedin.com/in/souravnandy/)
-**Publisher**: Manning Publications (forthcoming)
+| | |
+|---|---|
+| **Book** | *Hardening LLM Systems in Production: An Engineer's Playbook for Hallucinations, Prompt Injection, RAG Security, Agent Containment, and EU AI Act Compliance* |
+| **Author** | Rudrendu Paul · [ORCID](https://orcid.org/0009-0008-0141-4690) · [LinkedIn](https://www.linkedin.com/in/rudrendupaul/) |
+| **Co-author** | Sourav Nandy · [LinkedIn](https://www.linkedin.com/in/souravnandy/) · [GitHub](https://github.com/Sourav-Nandy-ai) |
+| **Publisher** | Manning Publications (forthcoming) |
 
 Clone the companion code repository:
 
@@ -21,9 +25,9 @@ cd hardening-llm-systems-production/companion-code
 
 - Python 3.10 or 3.11 recommended (`python --version  # requires 3.10+, tested on 3.11`)
 - `pip install -r requirements.txt`
-- `python -m spacy download en_core_web_lg`  (Chapter 8 — Presidio NER)
+- `python -m spacy download en_core_web_lg` (needed for Presidio NER in Chapter 8)
 
-All library versions in `requirements.txt` are pinned with `==` for full reproducibility. The companion repo runs a weekly CI job to flag version drift — check the **Actions** tab for current freshness status.
+All library versions in `requirements.txt` are pinned with `==` for full reproducibility. A weekly CI job flags version drift automatically; check the **Actions** tab for current freshness status.
 
 ---
 
@@ -33,7 +37,7 @@ All library versions in `requirements.txt` are pinned with `==` for full reprodu
 |---------|----------|-------------|------------|
 | [Ch 1: What Breaks After You Ship](ch01-what-breaks-after-you-ship/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch01-what-breaks-after-you-ship/ch01_notebook.ipynb) | [ch01_scripts.py](ch01-what-breaks-after-you-ship/ch01_scripts.py) | Self-diagnostic hardening scorecard + threat model vocabulary |
 | [Ch 2: Detecting Hallucinations](ch02-detecting-hallucinations/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch02-detecting-hallucinations/ch02_notebook.ipynb) | [ch02_scripts.py](ch02-detecting-hallucinations/ch02_scripts.py) | deepeval + RAGAS hallucination detection pipeline |
-| [Ch 3: Containing Hallucinations — CI/CD](ch03-containing-hallucinations-cicd/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch03-containing-hallucinations-cicd/ch03_notebook.ipynb) | [ch03_scripts.py](ch03-containing-hallucinations-cicd/ch03_scripts.py) | CI/CD hallucination gate with GitHub Actions |
+| [Ch 3: Containing Hallucinations via CI/CD](ch03-containing-hallucinations-cicd/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch03-containing-hallucinations-cicd/ch03_notebook.ipynb) | [ch03_scripts.py](ch03-containing-hallucinations-cicd/ch03_scripts.py) | CI/CD hallucination gate with GitHub Actions |
 | [Ch 4: Prompt Injection Defense](ch04-prompt-injection-defense/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch04-prompt-injection-defense/ch04_notebook.ipynb) | [ch04_scripts.py](ch04-prompt-injection-defense/ch04_scripts.py) | Defense-in-depth injection architecture |
 | [Ch 5: RAG and Retrieval Security](ch05-rag-retrieval-security/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch05-rag-retrieval-security/ch05_notebook.ipynb) | [ch05_scripts.py](ch05-rag-retrieval-security/ch05_scripts.py) | Per-tenant RAG authorization + retrieval anomaly detection |
 | [Ch 6: Red-Teaming: Automated Validation](ch06-red-teaming/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch06-red-teaming/ch06_notebook.ipynb) | [ch06_scripts.py](ch06-red-teaming/ch06_scripts.py) | Garak + PyRIT + Promptfoo CI scanning + reasoning-model trace testing |
@@ -112,16 +116,16 @@ Outputs are saved in-place to the `.ipynb` files. GitHub renders cell outputs di
 
 ## Environment variables
 
-Copy `.env.example` to `.env` and fill in your credentials. See the file for a complete key list by chapter. Never commit your `.env` file — it is in `.gitignore` by default.
+Copy `.env.example` to `.env` and fill in your credentials. See the file for a complete key list by chapter. Never commit your `.env` file; it's already excluded via `.gitignore`.
 
 The most commonly needed keys:
 
 | Key | Chapters | Required? |
 |-----|----------|-----------|
-| `OPENAI_API_KEY` | 2, 3, 6, 9, 11 | Optional — mock mode used if absent |
-| `ANTHROPIC_API_KEY` | 9 | Optional — mock mode used if absent |
-| `PINECONE_API_KEY` | 5 | Optional — stub client used if absent |
-| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 7, 11 | Optional — in-memory mode if absent |
+| `OPENAI_API_KEY` | 2, 3, 6, 9, 11 | Optional: mock mode used if absent |
+| `ANTHROPIC_API_KEY` | 9 | Optional: mock mode used if absent |
+| `PINECONE_API_KEY` | 5 | Optional: stub client used if absent |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | 7, 11 | Optional: in-memory mode if absent |
 
 ---
 
