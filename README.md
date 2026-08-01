@@ -9,7 +9,7 @@
 |---|---|
 | **Book** | *Hardening LLM Systems in Production: An Engineer's Playbook for Hallucinations, Prompt Injection, RAG Security, Agent Containment, and EU AI Act Compliance* |
 | **Author** | Rudrendu Paul · [ORCID](https://orcid.org/0009-0008-0141-4690) · [LinkedIn](https://www.linkedin.com/in/rudrendupaul/) |
-| **Co-author** | Sourav Nandy · [LinkedIn](https://www.linkedin.com/in/souravnandy/) · [GitHub](https://github.com/Sourav-Nandy-ai) |
+| **Co‑author** | Sourav Nandy · [LinkedIn](https://www.linkedin.com/in/souravnandy/) · [GitHub](https://github.com/Sourav-Nandy-ai) |
 | **Publisher** | Manning Publications (forthcoming) |
 
 Clone the companion code repository:
