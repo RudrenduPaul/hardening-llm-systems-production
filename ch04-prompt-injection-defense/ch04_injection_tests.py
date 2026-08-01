@@ -1,7 +1,7 @@
 
-"""ch05_injection_tests.py — CI regression suite for Chapter 5 defenses."""
+"""ch04_injection_tests.py — CI regression suite for Chapter 4 defenses."""
 import pytest
-from ch05_scripts import (
+from ch04_scripts import (
     MCPToolDefinition, ParameterSchema, ScopeToken, PrivilegeScopedLLMClient,
     OutputExfiltrationFilter, PromptInjectionDetector, InjectionDefensePipeline,
 )
