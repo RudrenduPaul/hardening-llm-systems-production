@@ -1425,7 +1425,7 @@ class PRHardeningGate:
         shadow_ok = True
         shadow_detail = ""
         if shadow is not None:
-            recommendation = shadow.get("recommendation", "unknown")
+            recommendation = shadow.get("recommendation_code", "unknown")
             shadow_ok = recommendation in ("promote", "hold")
             shadow_detail = f" | shadow-traffic recommendation: {recommendation}"
 
@@ -2250,7 +2250,7 @@ if __name__ == "__main__":
         retrieval_grounding_report={"context_precision": 0.82, "answer_relevancy": 0.86},
         ci_eval_report={
             **ci_report["results"]["deepeval"],
-            "shadow_traffic": {"recommendation": "promote", "mean_delta": 0.01},
+            "shadow_traffic": {"recommendation_code": "promote", "mean_delta": 0.01},
             "canary": {"passed": True, "error_rate_delta": -0.002},
         },
         rag_security_report={

@@ -1,98 +1,100 @@
 {
   "system_name": "Acme Customer Support Bot v2.1",
   "assessor": "Rudrendu Paul",
-  "date": "2026-05-31",
-  "overall_score_pct": 40,
-  "readiness_band": "EXPOSED",
+  "date": "2026-08-01",
+  "total_score": 11,
+  "max_score": 25,
+  "overall_score_pct": 44,
+  "exposure_tier": "PARTIAL",
+  "exposure_tier_label": "Partial hardening",
   "answered_questions": 25,
   "total_questions": 25,
   "vectors": [
     {
-      "name": "Hallucination & Factuality",
-      "score_pct": 40,
-      "risk_level": "HIGH",
-      "answered_yes": 2,
-      "total": 5,
+      "key": "hallucination_containment",
+      "label": "Hallucination containment",
+      "score": 3,
+      "max_score": 5,
+      "chapter_reference": "Chapters 2-3",
       "gaps": [
-        "H2",
-        "H3",
-        "H4"
+        "HC4",
+        "HC5"
       ]
     },
     {
-      "name": "Prompt Injection & Adversarial Inputs",
-      "score_pct": 40,
-      "risk_level": "HIGH",
-      "answered_yes": 2,
-      "total": 5,
+      "key": "adversarial_hardening",
+      "label": "Adversarial hardening",
+      "score": 2,
+      "max_score": 5,
+      "chapter_reference": "Chapters 4, 6",
       "gaps": [
-        "P2",
-        "P4",
-        "P5"
+        "AH2",
+        "AH3",
+        "AH4"
       ]
     },
     {
-      "name": "Output Safety & Policy Compliance",
-      "score_pct": 60,
-      "risk_level": "MEDIUM",
-      "answered_yes": 3,
-      "total": 5,
+      "key": "agentic_safety",
+      "label": "Agentic safety",
+      "score": 2,
+      "max_score": 5,
+      "chapter_reference": "Chapter 7",
       "gaps": [
-        "O3",
-        "O5"
+        "AS1",
+        "AS4",
+        "AS5"
       ]
     },
     {
-      "name": "Observability & Incident Response",
-      "score_pct": 40,
-      "risk_level": "HIGH",
-      "answered_yes": 2,
-      "total": 5,
+      "key": "data_leakage_prevention",
+      "label": "Data leakage prevention",
+      "score": 2,
+      "max_score": 5,
+      "chapter_reference": "Chapters 5, 8",
       "gaps": [
-        "I2",
-        "I4",
-        "I5"
+        "DL2",
+        "DL4",
+        "DL5"
       ]
     },
     {
-      "name": "Governance & Access Control",
-      "score_pct": 20,
-      "risk_level": "CRITICAL",
-      "answered_yes": 1,
-      "total": 5,
+      "key": "compliance_readiness",
+      "label": "Compliance readiness",
+      "score": 2,
+      "max_score": 5,
+      "chapter_reference": "Chapter 10",
       "gaps": [
-        "G1",
-        "G2",
-        "G3",
-        "G5"
+        "CR2",
+        "CR3",
+        "CR5"
       ]
     }
   ],
   "answers": {
-    "H1": true,
-    "H2": false,
-    "H3": false,
-    "H4": false,
-    "H5": true,
-    "P1": true,
-    "P2": false,
-    "P3": true,
-    "P4": false,
-    "P5": false,
-    "O1": true,
-    "O2": true,
-    "O3": false,
-    "O4": true,
-    "O5": false,
-    "I1": true,
-    "I2": false,
-    "I3": true,
-    "I4": false,
-    "I5": false,
-    "G1": false,
-    "G2": false,
-    "G3": false,
-    "G4": true,
-    "G5": false
+    "HC1": true,
+    "HC2": true,
+    "HC3": true,
+    "HC4": false,
+    "HC5": false,
+    "AH1": true,
+    "AH2": false,
+    "AH3": false,
+    "AH4": false,
+    "AH5": true,
+    "AS1": false,
+    "AS2": true,
+    "AS3": true,
+    "AS4": false,
+    "AS5": false,
+    "DL1": true,
+    "DL2": false,
+    "DL3": true,
+    "DL4": false,
+    "DL5": false,
+    "CR1": true,
+    "CR2": false,
+    "CR3": false,
+    "CR4": true,
+    "CR5": false
   }
 }

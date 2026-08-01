@@ -7,16 +7,20 @@ Build a multi-layer defense-in-depth architecture against prompt injection — c
 | File | Description |
 |------|-------------|
 | [`ch04_notebook.ipynb`](ch04_notebook.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch04-prompt-injection-defense/ch04_notebook.ipynb) | Interactive notebook: test each defense layer individually and as a full pipeline |
-| [`ch04_scripts.py`](ch04_scripts.py) | `InjectionScanner`, `ToolCallValidator`, `OutputFilter`, `PrivilegeScopedLLMClient` |
+| [`ch04_scripts.py`](ch04_scripts.py) | `MCPToolDefinition`, `ScopeToken`, `PrivilegeScopedLLMClient`, `OutputExfiltrationFilter`, `BlastRadiusLimiter`, `CapabilityToken`, `CapabilityRuntime`, `PromptInjectionDetector`, `InjectionDefensePipeline` |
+| [`ch04_injection_tests.py`](ch04_injection_tests.py) | pytest regression suite covering the validator, scope token, exfiltration filter, detector, and full pipeline |
+| [`ch04_prompt_hash_gate.py`](ch04_prompt_hash_gate.py) | Listing 4.7: standalone SHA-256 prompt-hash gate for CI |
 
 ## What this chapter builds
 
-- **InjectionScanner** — regex + heuristic scanner for direct and indirect injection patterns
-- **ToolCallValidator** — Pydantic schema enforcement for tool arguments before dispatch
-- **OutputFilter** — post-generation scan for instruction-following leakage and data exfiltration patterns
-- **PrivilegeScopedLLMClient** — wraps any LLM client; enforces least-privilege tool grants per request context
-- **Defense pipeline** — composable chain: scan → validate scope → call LLM → filter output
-- **pytest gate** — auto-generated test file covering blocked and allowed scenarios
+- **`MCPToolDefinition`** — Pydantic schema validator for MCP tool definitions; rejects injection-like patterns in tool descriptions and enforces a safe naming policy (listing 4.1)
+- **`ScopeToken` + `PrivilegeScopedLLMClient`** — OAuth-style scope tokens; strips any tool whose required scope isn't granted before the request reaches the model (listing 4.2)
+- **`OutputExfiltrationFilter`** — post-generation scan for URLs, base64 blobs, credentials, and PII in model output (listing 4.3)
+- **`BlastRadiusLimiter`** — rate limiting and confirmation gates for high-impact tool actions (listing 4.4)
+- **`CapabilityToken` + `CapabilityRuntime`** — simplified CaMeL-inspired capability tokens issued and validated by a trusted runtime the model never sees (listing 4.5)
+- **`PromptInjectionDetector`** — two-layer detection pipeline: regex heuristics plus an optional LLM Guard scanner (listing 4.6)
+- **`InjectionDefensePipeline`** — composable chain: validate tools → check scope token → detect injection → apply blast-radius limits → filter output
+- **pytest gate** — `ch04_injection_tests.py` covers blocked and allowed scenarios across every component above
 
 ## Prerequisites
 

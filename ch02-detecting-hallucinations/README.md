@@ -7,12 +7,12 @@ Build a production hallucination detection pipeline that combines deepeval's `Ha
 | File | Description |
 |------|-------------|
 | [`ch02_notebook.ipynb`](ch02_notebook.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch02-detecting-hallucinations/ch02_notebook.ipynb) | Interactive notebook: run hallucination metrics, visualize score distributions, compute kappa |
-| [`ch02_scripts.py`](ch02_scripts.py) | `HallucinationMetric`, `RAGASFaithfulnessScorer`, `CombinedHallucinationScorer` |
+| [`ch02_scripts.py`](ch02_scripts.py) | `HallucinationMetric`, `RAGASPipeline`, `CombinedHallucinationScorer` |
 
 ## What this chapter builds
 
 - **HallucinationMetric** — thin wrapper around deepeval with normalized interface
-- **RAGASFaithfulnessScorer** — sentence-level claim decomposition and entailment checking
+- **RAGASPipeline** — sentence-level claim decomposition and entailment checking
 - **CombinedHallucinationScorer** — ensemble averaging with configurable weights
 - **Inter-rater reliability** — Cohen's kappa validates metric agreement before deploying
 - **Statistical power analysis** — minimum sample size calculator for hallucination regression suites

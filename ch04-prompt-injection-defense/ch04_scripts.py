@@ -1,5 +1,5 @@
 """
-Chapter 5: Prompt Injection: Defense-in-Depth When the Model Cannot Refuse
+Chapter 4: Prompt Injection: Defense-in-Depth When the Model Cannot Refuse
 Hardening LLM Systems in Production — Companion Code
 Author: Rudrendu Paul | https://orcid.org/0009-0008-0141-4690
 Requirements:
@@ -15,6 +15,7 @@ import base64
 import hashlib
 import json
 import re
+import secrets
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -60,7 +61,7 @@ class MCPToolDefinition(BaseModel):
     @classmethod
     def description_must_not_contain_injections(cls, v: str) -> str:
         SUSPICIOUS_PATTERNS = [
-            r"ignore (previous|all) instructions",
+            r"ignore\s+(all\s+)?(previous\s+)?instructions",
             r"disregard (the )?(above|prior|previous)",
             r"you are now",
             r"act as (an? )?",
@@ -91,11 +92,21 @@ class MCPToolDefinition(BaseModel):
         }
 
 
-def validate_tool_registry(raw_tools: list[dict[str, Any]]) -> list[MCPToolDefinition]:
-    """Parse and validate a list of raw tool dictionaries."""
+def validate_tool_registry(
+    raw_tools: list[dict[str, Any] | MCPToolDefinition],
+) -> list[MCPToolDefinition]:
+    """Parse and validate a list of raw tool dictionaries.
+
+    Accepts either raw dicts (validated fresh against MCPToolDefinition) or
+    already-built MCPToolDefinition instances (passed through as-is, since
+    they were validated at construction time already).
+    """
     validated: list[MCPToolDefinition] = []
     errors: list[str] = []
     for i, raw in enumerate(raw_tools):
+        if isinstance(raw, MCPToolDefinition):
+            validated.append(raw)
+            continue
         try:
             validated.append(MCPToolDefinition(**raw))
         except Exception as exc:
@@ -267,7 +278,7 @@ class OutputExfiltrationFilter:
         # Credentials
         cred_hits = self.CREDENTIAL_PATTERN.findall(output)
         if cred_hits:
-            triggers.append(f"Credential pattern detected: {[c[0] for c in cred_hits]}")
+            triggers.append(f"Credential pattern detected: {cred_hits}")
             sanitized = self.CREDENTIAL_PATTERN.sub(r"\1=[REDACTED]", sanitized)
 
         # PII
@@ -351,53 +362,75 @@ class BlastRadiusLimiter:
 # 5. CaMeL-Inspired Capability-Token Wrapper
 # ---------------------------------------------------------------------------
 
-class CapabilityLevel(str, Enum):
-    NONE = "none"
-    READ = "read"
-    READ_WRITE = "read_write"
-    ADMIN = "admin"
-
-
-@dataclass
+@dataclass(frozen=True)
 class CapabilityToken:
     """
-    Coarse-grained capability token inspired by the CaMeL framework
-    (Debenedetti et al., 2024). Wraps a value with an attached capability
-    level so downstream tools can enforce least-privilege access.
+    An unforgeable capability token granting access to a named capability.
+    The model receives the token ID, not the secret. The runtime holds the
+    secret and validates before execution, following the CaMeL framework's
+    reasoning/execution split (Debenedetti et al., 2024).
     """
 
-    value: Any
-    capability: CapabilityLevel
-    origin: str  # "user_input" | "tool_output" | "system"
-    token_id: str = field(default_factory=lambda: str(uuid4())[:8])
+    token_id: str
+    capability_name: str
+    session_id: str
+    expires_at: float  # Unix timestamp
+    _secret: str        # Not exposed to the model
 
-    def __post_init__(self) -> None:
-        # Values from tool outputs are treated as untrusted by default.
-        if self.origin == "tool_output" and self.capability == CapabilityLevel.ADMIN:
-            raise ValueError(
-                "Tool outputs cannot carry ADMIN capability. "
-                "Escalation must be explicit."
-            )
+    def is_valid(self) -> bool:
+        return time.time() < self.expires_at
 
-    def downgrade(self, new_level: CapabilityLevel) -> "CapabilityToken":
-        """Return a new token with reduced capability (monotone downgrade only)."""
-        ORDER = [CapabilityLevel.NONE, CapabilityLevel.READ, CapabilityLevel.READ_WRITE, CapabilityLevel.ADMIN]
-        if ORDER.index(new_level) >= ORDER.index(self.capability):
-            raise ValueError("Capability tokens can only be downgraded, not escalated.")
-        return CapabilityToken(
-            value=self.value,
-            capability=new_level,
-            origin=self.origin,
-            token_id=self.token_id,
+    def hmac_digest(self) -> str:
+        """Compute a simple HMAC-like digest to detect tampering."""
+        payload = f"{self.token_id}:{self.capability_name}:{self.session_id}:{self.expires_at}"
+        return hashlib.sha256(f"{payload}:{self._secret}".encode()).hexdigest()
+
+
+class CapabilityRuntime:
+    """
+    Trusted component: issues capability tokens and validates them at
+    execution time. The model never sees this class, its secrets, or the
+    capability implementations behind `invoke` -- it only ever receives a
+    token ID. An injected instruction to invoke an ungranted capability
+    produces a `PermissionError` here, before any execution occurs.
+    """
+
+    def __init__(self) -> None:
+        self._issued: dict[str, CapabilityToken] = {}
+
+    def issue(self, capability_name: str, session_id: str, ttl_seconds: int = 3600) -> CapabilityToken:
+        """Issue a new token bound to exactly one capability for one session."""
+        token = CapabilityToken(
+            token_id=str(uuid4()),
+            capability_name=capability_name,
+            session_id=session_id,
+            expires_at=time.time() + ttl_seconds,
+            _secret=secrets.token_hex(32),
         )
+        self._issued[token.token_id] = token
+        return token
 
-    def assert_capability(self, required: CapabilityLevel) -> None:
-        ORDER = [CapabilityLevel.NONE, CapabilityLevel.READ, CapabilityLevel.READ_WRITE, CapabilityLevel.ADMIN]
-        if ORDER.index(self.capability) < ORDER.index(required):
+    def validate(self, token_id: str, requested_capability: str) -> bool:
+        """
+        Validate a token ID against the capability the caller wants to invoke.
+        Returns False (never raises) so callers can log-and-deny cleanly.
+        """
+        token = self._issued.get(token_id)
+        if token is None or not token.is_valid():
+            return False
+        return token.capability_name == requested_capability
+
+    def invoke(self, token_id: str, requested_capability: str, fn: Callable[[], Any]) -> Any:
+        """
+        Execute `fn` only if `token_id` authorizes `requested_capability`.
+        The model can't request `send_email` through a `read_email` token:
+        the capability name is bound at issuance, not chosen at call time.
+        """
+        if not self.validate(token_id, requested_capability):
             raise PermissionError(
-                f"Token {self.token_id} has capability '{self.capability}' "
-                f"but '{required}' is required."
+                f"Token '{token_id}' is not authorized for capability '{requested_capability}'."
             )
+        return fn()
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +453,7 @@ class PromptInjectionDetector:
     """
 
     DIRECT_INJECTION_PATTERNS = [
-        (re.compile(r"ignore (all |previous |prior )?(instructions?|prompts?|rules?)", re.I), "ignore-instructions"),
+        (re.compile(r"ignore\s+((all|previous|prior)\s+)*(instructions?|prompts?|rules?)", re.I), "ignore-instructions"),
         (re.compile(r"you (are|must|should|will) now", re.I), "persona-switch"),
         (re.compile(r"(system|developer|operator) (prompt|instructions?)", re.I), "system-prompt-probe"),
         (re.compile(r"\[INST\]|\[/INST\]|<\|im_start\|>|<\|im_end\|>", re.I), "control-token-injection"),
@@ -515,7 +548,7 @@ class InjectionDefensePipeline:
 
     def __init__(
         self,
-        tools: list[dict[str, Any]],
+        tools: list[dict[str, Any] | MCPToolDefinition],
         token: ScopeToken,
         blast_limiter: Optional[BlastRadiusLimiter] = None,
     ) -> None:
@@ -560,7 +593,7 @@ class InjectionDefensePipeline:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("=== Chapter 5: Prompt Injection: Defense-in-Depth When the Model Cannot Refuse — Demo ===\n")
+    print("=== Chapter 4: Prompt Injection: Defense-in-Depth When the Model Cannot Refuse — Demo ===\n")
 
     # 1. Build a valid tool registry
     raw_tools = [

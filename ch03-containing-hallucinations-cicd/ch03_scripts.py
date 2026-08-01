@@ -1,10 +1,13 @@
 """
-Chapter 4: Containing Hallucinations — Wiring Detection into CI/CD
+Chapter 3: Containing Hallucinations as a CI/CD-Blocking Metric
 Hardening LLM Systems in Production — Companion Code
 Author: Rudrendu Paul | https://orcid.org/0009-0008-0141-4690
 
 Implements:
-  - HallucinationGate: full CI gate class with sys.exit(1) on failure
+  - HallucinationGate: CI gate class with sys.exit(1) on failure (Listing 3.2)
+  - GateConfig + HallucinationCIGate: the complete CI/CD gate — config
+    management, the re-run policy, and baseline drift detection (Listing 3.7,
+    sections 3.7.1-3.7.3)
   - SelfConsistencyChecker: sample N completions, measure agreement
   - ClaimDecompositionPipeline: decompose compound answers into atomic claims
   - ShadowTrafficHarness: replay production traffic against a candidate model
@@ -16,14 +19,19 @@ Requirements:
     ragas==0.1.21
     scikit-learn>=1.3.0,<2.0
     scipy>=1.11.0,<2.0
+    pydantic==2.7.1        # optional — GateConfig falls back to a dataclass
+                            # if pydantic isn't installed, so the script
+                            # stays importable without the full ML stack
 
 Usage:
-    python ch04_scripts.py
-    python ch04_scripts.py --gate          # Run CI gate demo
-    python ch04_scripts.py --consistency   # Run self-consistency demo
-    python ch04_scripts.py --claims        # Run claim decomposition demo
-    python ch04_scripts.py --shadow        # Run shadow traffic demo
-    python ch04_scripts.py --gen-yaml      # Print the GitHub Actions YAML
+    python ch03_scripts.py
+    python ch03_scripts.py --gate          # Run CI gate demo (Listing 3.2)
+    python ch03_scripts.py --ci-gate       # Run full CI/CD gate demo (Listing 3.7):
+                                            # config, re-run policy, baseline drift
+    python ch03_scripts.py --consistency   # Run self-consistency demo
+    python ch03_scripts.py --claims        # Run claim decomposition demo
+    python ch03_scripts.py --shadow        # Run shadow traffic demo
+    python ch03_scripts.py --gen-yaml      # Print the GitHub Actions YAML
 """
 
 from __future__ import annotations
@@ -32,9 +40,11 @@ import argparse
 import json
 import random
 import sys
+import tempfile
 import textwrap
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Optional
 
 # ---------------------------------------------------------------------------
@@ -46,6 +56,12 @@ try:
     _OPENAI_AVAILABLE = True
 except ImportError:
     _OPENAI_AVAILABLE = False
+
+try:
+    from pydantic import BaseModel as _PydanticBaseModel
+    _PYDANTIC_AVAILABLE = True
+except ImportError:
+    _PYDANTIC_AVAILABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +231,362 @@ class HallucinationGate:
         intersection = ctx_tokens & ans_tokens
         union = ctx_tokens | ans_tokens
         return len(intersection) / len(union)
+
+
+# ---------------------------------------------------------------------------
+# 1b. GateConfig + HallucinationCIGate — the complete CI/CD gate (Listing 3.7)
+# ---------------------------------------------------------------------------
+#
+# HallucinationGate above (Listing 3.2) is the minimal merge-blocking check:
+# one run, one threshold, one sys.exit(1). Section 3.7 assembles a more
+# complete gate on top of that idea — configuration management (3.7.1), a
+# re-run policy that absorbs judge-score flakiness (3.7.2), and baseline
+# drift detection for model/provider changes (3.7.3). GateConfig and
+# HallucinationCIGate below implement that assembled gate for real.
+
+if _PYDANTIC_AVAILABLE:
+
+    class GateConfig(_PydanticBaseModel):
+        """Configuration for the hallucination CI/CD gate (Listing 3.7)."""
+
+        threshold: float = 0.05          # Max acceptable hallucination rate
+        sample_size: int = 100           # Examples per eval run
+        concurrency: int = 20            # Parallel API calls
+        max_reruns: int = 2              # Reruns before definitive fail
+        rerun_pass_count: int = 2        # Passes out of max_reruns+1 needed
+        baseline_drift_threshold: float = 0.02  # Alert if rate shifts > 2pp
+        baseline_file: str = ".hallucination_baseline.json"
+        golden_dataset: str = "data/golden_dataset_ci.jsonl"
+        model: str = "gpt-4o-mini"
+        judge_model: str = "gpt-4o-mini"
+        report_path: str = "reports/gate_report.json"
+
+else:
+
+    @dataclass
+    class GateConfig:  # type: ignore[no-redef]
+        """
+        Configuration for the hallucination CI/CD gate (Listing 3.7).
+
+        Dataclass fallback used when pydantic isn't installed, so this
+        module stays importable without the full ML/validation stack.
+        Field names and defaults match the pydantic version exactly.
+        """
+
+        threshold: float = 0.05          # Max acceptable hallucination rate
+        sample_size: int = 100           # Examples per eval run
+        concurrency: int = 20            # Parallel API calls
+        max_reruns: int = 2              # Reruns before definitive fail
+        rerun_pass_count: int = 2        # Passes out of max_reruns+1 needed
+        baseline_drift_threshold: float = 0.02  # Alert if rate shifts > 2pp
+        baseline_file: str = ".hallucination_baseline.json"
+        golden_dataset: str = "data/golden_dataset_ci.jsonl"
+        model: str = "gpt-4o-mini"
+        judge_model: str = "gpt-4o-mini"
+        report_path: str = "reports/gate_report.json"
+
+
+@dataclass
+class RerunAttempt:
+    """One evaluation attempt within the re-run policy (section 3.7.2)."""
+    attempt_number: int
+    passed: bool
+    hallucination_rate: float
+    n_samples: int
+
+
+@dataclass
+class CIGateResult:
+    """Outcome of a full CI/CD gate run, including re-run and drift data."""
+    passed: bool
+    final_rate: float
+    threshold: float
+    attempts: list[RerunAttempt] = field(default_factory=list)
+    pass_count: int = 0
+    fail_count: int = 0
+    baseline_drift_detected: bool = False
+    baseline_drift_amount: Optional[float] = None
+    warning: Optional[str] = None
+
+    @property
+    def summary_line(self) -> str:
+        status = "PASS" if self.passed else "FAIL"
+        drift = (
+            f" drift={self.baseline_drift_amount:+.4f}"
+            if self.baseline_drift_detected else ""
+        )
+        return (
+            f"[{status}] rate={self.final_rate:.4f} threshold={self.threshold} "
+            f"attempts={len(self.attempts)} passes={self.pass_count}/"
+            f"{len(self.attempts)}{drift}"
+        )
+
+
+class HallucinationCIGate:
+    """
+    The complete CI/CD hallucination gate (Listing 3.7).
+
+    Three layers on top of the single-shot HallucinationGate check:
+
+    1. Configuration management (section 3.7.1) — every tunable lives on
+       GateConfig instead of being scattered across call sites.
+    2. The re-run policy (section 3.7.2) — LLM-as-judge evaluation isn't
+       deterministic, so a single failing run doesn't block the merge on
+       its own. If the first run fails, the gate re-runs on a fresh sample
+       slice up to `config.max_reruns` additional times, and requires
+       `config.rerun_pass_count` passes out of the attempts made before
+       blocking. This is the same flaky-test-handling pattern CI systems
+       apply to non-deterministic test suites.
+    3. Baseline drift detection (section 3.7.3) — the gate persists the
+       hallucination rate from the most recent full run to `baseline_file`
+       and flags a shift bigger than `baseline_drift_threshold` as a
+       baseline-drift warning (model/provider change) instead of quietly
+       passing or failing for the wrong reason.
+
+    Parameters
+    ----------
+    config : GateConfig
+        Gate configuration (see GateConfig for field descriptions).
+    scorer : callable, optional
+        A function (question, answer, context) -> float returning a
+        hallucination-rate score in [0, 1], where 0 is fully grounded and
+        1 is fully hallucinated. If None, uses a deterministic mock scorer
+        (1 - Jaccard token overlap with context) suitable for dry runs.
+        Real deployment replaces this with the CombinedHallucinationScorer
+        from chapter 2.
+    """
+
+    def __init__(
+        self,
+        config: GateConfig,
+        scorer: Optional[Callable] = None,
+    ) -> None:
+        self.config = config
+        self.scorer = scorer or self._mock_hallucination_rate_scorer
+
+    # ------------------------------------------------------------------
+    # Mock scorer (hallucination-rate direction, not faithfulness)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _mock_hallucination_rate_scorer(
+        question: str, answer: str, context: list[str]
+    ) -> float:
+        """
+        Deterministic mock hallucination-rate score: 0.0 = fully grounded,
+        1.0 = fully hallucinated. This is 1 minus the Jaccard token-overlap
+        scorer HallucinationGate uses for faithfulness, because GateConfig's
+        `threshold` is a rate ceiling ("max acceptable hallucination rate"),
+        the opposite direction from HallucinationGate's faithfulness floor.
+        """
+        ctx_tokens = set(
+            w.lower() for passage in context for w in passage.split()
+        )
+        ans_tokens = set(answer.lower().split())
+        if not ctx_tokens or not ans_tokens:
+            return 1.0
+        intersection = ctx_tokens & ans_tokens
+        union = ctx_tokens | ans_tokens
+        faithfulness = len(intersection) / len(union)
+        return round(1.0 - faithfulness, 4)
+
+    # ------------------------------------------------------------------
+    # Re-run policy (section 3.7.2)
+    # ------------------------------------------------------------------
+
+    def _fresh_sample(self, golden_dataset: list[dict], attempt_index: int) -> list[dict]:
+        """
+        Return a fresh slice of `sample_size` examples for this attempt.
+
+        Rotates the starting offset per attempt so a re-run doesn't just
+        re-score the exact same examples that already failed — matching
+        section 3.7.2's "run again with a fresh sample" rule — while
+        staying deterministic (no random.sample) so the same attempt
+        number always draws the same slice, per section 3.1.2's
+        deterministic-sampling rule.
+        """
+        n = len(golden_dataset)
+        if n == 0:
+            return []
+        size = min(self.config.sample_size, n)
+        start = (attempt_index * size) % n
+        if start + size <= n:
+            return golden_dataset[start:start + size]
+        return golden_dataset[start:] + golden_dataset[: (start + size) - n]
+
+    def _run_once(self, golden_dataset: list[dict], attempt_index: int) -> float:
+        """Score one fresh sample slice and return the mean hallucination rate."""
+        sample = self._fresh_sample(golden_dataset, attempt_index)
+        if not sample:
+            return 1.0
+        scores = [
+            self.scorer(item["question"], item["answer"], item["context"])
+            for item in sample
+        ]
+        return round(sum(scores) / len(scores), 4)
+
+    def run_with_rerun_policy(self, golden_dataset: list[dict]) -> CIGateResult:
+        """
+        Run the gate under the re-run policy from section 3.7.2.
+
+        Runs up to `max_reruns + 1` total attempts. Stops early once the
+        pass/fail outcome is mathematically decided (either enough passes
+        to clear `rerun_pass_count`, or too few attempts remain to reach
+        it), so a clean first-run pass doesn't burn extra API calls.
+        """
+        total_attempts = self.config.max_reruns + 1
+        attempts: list[RerunAttempt] = []
+        pass_count = 0
+        fail_count = 0
+
+        for i in range(total_attempts):
+            rate = self._run_once(golden_dataset, i)
+            passed = rate <= self.config.threshold
+            attempts.append(RerunAttempt(
+                attempt_number=i + 1,
+                passed=passed,
+                hallucination_rate=rate,
+                n_samples=min(self.config.sample_size, len(golden_dataset)),
+            ))
+            pass_count += 1 if passed else 0
+            fail_count += 0 if passed else 1
+
+            if pass_count >= self.config.rerun_pass_count:
+                break
+            remaining = total_attempts - (i + 1)
+            if pass_count + remaining < self.config.rerun_pass_count:
+                break
+
+        final_passed = pass_count >= self.config.rerun_pass_count
+        final_rate = attempts[-1].hallucination_rate if attempts else 1.0
+
+        warning = None
+        if final_passed and fail_count > 0:
+            warning = (
+                f"Gate passed on a re-run ({pass_count}/{len(attempts)} attempts "
+                f"passed) — at least one evaluation run was flaky."
+            )
+        elif not final_passed and pass_count > 0:
+            warning = (
+                f"Gate failed despite {pass_count}/{len(attempts)} passing "
+                f"attempts — fewer than rerun_pass_count={self.config.rerun_pass_count} passed."
+            )
+
+        drift_detected, drift_amount = self._check_baseline_drift(final_rate)
+
+        return CIGateResult(
+            passed=final_passed,
+            final_rate=final_rate,
+            threshold=self.config.threshold,
+            attempts=attempts,
+            pass_count=pass_count,
+            fail_count=fail_count,
+            baseline_drift_detected=drift_detected,
+            baseline_drift_amount=drift_amount,
+            warning=warning,
+        )
+
+    # ------------------------------------------------------------------
+    # Baseline drift detection (section 3.7.3)
+    # ------------------------------------------------------------------
+
+    def _load_baseline(self) -> Optional[dict]:
+        path = Path(self.config.baseline_file)
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def _check_baseline_drift(self, current_rate: float) -> tuple[bool, Optional[float]]:
+        """
+        Compare `current_rate` against the stored baseline hallucination
+        rate. A shift larger than `baseline_drift_threshold` in either
+        direction is flagged as drift — most often a model/provider
+        version change rather than a real prompt regression.
+        """
+        baseline = self._load_baseline()
+        if baseline is None or "hallucination_rate" not in baseline:
+            return False, None
+        drift = round(current_rate - baseline["hallucination_rate"], 4)
+        drift_detected = abs(drift) > self.config.baseline_drift_threshold
+        return drift_detected, drift
+
+    def update_baseline(self, current_rate: float, model: Optional[str] = None) -> None:
+        """Persist the current run's hallucination rate as the new baseline."""
+        path = Path(self.config.baseline_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "hallucination_rate": round(current_rate, 4),
+            "model": model or self.config.model,
+        }, indent=2))
+
+    # ------------------------------------------------------------------
+    # Reporting and enforcement
+    # ------------------------------------------------------------------
+
+    def report(self, result: CIGateResult) -> None:
+        """Print a human-readable gate report to stdout."""
+        print("\n" + "=" * 60)
+        print("  CI/CD HALLUCINATION GATE REPORT (Listing 3.7)")
+        print("=" * 60)
+        print(f"  {result.summary_line}")
+        print()
+        for a in result.attempts:
+            status = "PASS" if a.passed else "FAIL"
+            print(
+                f"  Attempt {a.attempt_number}: [{status}] "
+                f"rate={a.hallucination_rate:.4f} n={a.n_samples}"
+            )
+        if result.baseline_drift_detected:
+            print(
+                f"\n  BASELINE DRIFT WARNING: rate shifted "
+                f"{result.baseline_drift_amount:+.4f} vs. stored baseline "
+                f"(threshold {self.config.baseline_drift_threshold})."
+            )
+            print("  Recalibrate the threshold; do not treat this as a PR rejection.")
+        if result.warning:
+            print(f"\n  NOTE: {result.warning}")
+        print()
+        if result.passed:
+            print("  Gate PASSED.")
+        else:
+            print(
+                f"  Gate FAILED. {result.pass_count}/{len(result.attempts)} "
+                f"attempts passed threshold {result.threshold}."
+            )
+        print("=" * 60 + "\n")
+
+    def write_report(self, result: CIGateResult) -> None:
+        """Write the gate report as a CI artifact (section 3.7.4)."""
+        path = Path(self.config.report_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "passed": result.passed,
+            "final_rate": result.final_rate,
+            "threshold": result.threshold,
+            "pass_count": result.pass_count,
+            "fail_count": result.fail_count,
+            "attempts": [
+                {
+                    "attempt_number": a.attempt_number,
+                    "passed": a.passed,
+                    "hallucination_rate": a.hallucination_rate,
+                    "n_samples": a.n_samples,
+                }
+                for a in result.attempts
+            ],
+            "baseline_drift_detected": result.baseline_drift_detected,
+            "baseline_drift_amount": result.baseline_drift_amount,
+            "warning": result.warning,
+        }, indent=2))
+
+    def enforce(self, result: CIGateResult, exit_on_fail: bool = True) -> None:
+        """Exit the process with code 1 if the gate failed."""
+        if not result.passed and exit_on_fail:
+            print("Exiting with code 1 — hallucination CI gate failed.", file=sys.stderr)
+            sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +927,15 @@ class ShadowReport:
     mean_candidate_score: float
     mean_delta: float
     recommendation: str
+    # Machine-readable companion to `recommendation` above: just the
+    # lowercase decision token ("promote" / "hold" / "block"), with no
+    # score embedded in the string. `recommendation` is built for a human
+    # reading a shadow-traffic report; `recommendation_code` is built for
+    # a caller like ch11's PRHardeningGate that branches on the verdict
+    # programmatically (`shadow.get("recommendation_code", "unknown") in
+    # ("promote", "hold")`) and would never match against the descriptive
+    # string.
+    recommendation_code: str
     comparisons: list[ShadowComparison] = field(default_factory=list)
 
 
@@ -657,7 +1038,8 @@ class ShadowTrafficHarness:
         losses = sum(1 for c in comparisons if not c.candidate_wins and c.delta != 0)
         ties = len(comparisons) - wins - losses
 
-        recommendation = self._recommend(mean_delta)
+        recommendation_code = self._classify(mean_delta)
+        recommendation = self._recommend(mean_delta, recommendation_code)
 
         return ShadowReport(
             total=len(comparisons),
@@ -668,13 +1050,27 @@ class ShadowTrafficHarness:
             mean_candidate_score=round(mean_cand, 4),
             mean_delta=round(mean_delta, 4),
             recommendation=recommendation,
+            recommendation_code=recommendation_code,
             comparisons=comparisons,
         )
 
-    def _recommend(self, mean_delta: float) -> str:
+    def _classify(self, mean_delta: float) -> str:
+        """
+        Return the lowercase decision token a caller can branch on:
+        "promote", "hold", or "block". This is `recommendation_code` on
+        the returned ShadowReport.
+        """
         if mean_delta >= self.min_improvement:
-            return f"PROMOTE — candidate improves mean score by {mean_delta:+.4f}."
+            return "promote"
         if mean_delta <= self.max_regression:
+            return "block"
+        return "hold"
+
+    def _recommend(self, mean_delta: float, code: str) -> str:
+        """Build the human-readable `recommendation` string for `code`."""
+        if code == "promote":
+            return f"PROMOTE — candidate improves mean score by {mean_delta:+.4f}."
+        if code == "block":
             return f"BLOCK — candidate regresses mean score by {mean_delta:+.4f}."
         return f"HOLD — delta {mean_delta:+.4f} is within tolerance. Extend shadow window."
 
@@ -725,16 +1121,21 @@ def _jaccard_score(question: str, answer: str, context: list[str]) -> float:
 
 GITHUB_ACTIONS_YAML = """\
 # .github/workflows/hallucination-gate.yml
-# Chapter 4 — Hardening LLM Systems in Production
+# Chapter 3 — Hardening LLM Systems in Production
 # Hallucination CI gate: fails the build if mean faithfulness < threshold.
+# Scope matches manuscript Listing 3.1 exactly: PR-to-main only, and only
+# when a change could plausibly move the hallucination rate (src/, prompts/,
+# or config/ changed) — not on every PR to every branch.
 
-name: Hallucination Gate
+name: Hallucination Rate Gate
 
 on:
   pull_request:
-    branches: [main, staging]
-  push:
     branches: [main]
+    paths:
+      - "src/**"
+      - "prompts/**"
+      - "config/**"
 
 env:
   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -743,9 +1144,9 @@ env:
 
 jobs:
   hallucination-gate:
-    name: Hallucination Faithfulness Gate
+    name: Hallucination Rate Gate
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -765,7 +1166,7 @@ jobs:
 
       - name: Run hallucination gate
         run: |
-          python ch04_scripts.py --gate \\
+          python ch03_scripts.py --gate \\
             --threshold ${{ env.HALLUCINATION_THRESHOLD }} \\
             --suite ${{ env.TEST_SUITE_PATH }}
         # sys.exit(1) on failure causes this step to fail,
@@ -836,14 +1237,71 @@ DEMO_TRAFFIC_LOGS = [
 
 
 # ---------------------------------------------------------------------------
+# CI/CD gate demo (Listing 3.7): config management, re-run policy, drift
+# ---------------------------------------------------------------------------
+
+def _demo_ci_gate() -> None:
+    """
+    Demo for the complete CI/CD gate (Listing 3.7): configuration
+    management via GateConfig, the re-run policy (section 3.7.2), and
+    baseline drift detection (section 3.7.3), run end to end against the
+    same DEMO_TEST_SUITE used by the other demos.
+    """
+    tmp_dir = tempfile.mkdtemp(prefix="ch03_gate_demo_")
+    baseline_path = str(Path(tmp_dir) / "baseline.json")
+
+    config = GateConfig(
+        threshold=0.66,
+        sample_size=3,
+        max_reruns=2,
+        rerun_pass_count=2,
+        baseline_drift_threshold=0.02,
+        baseline_file=baseline_path,
+        report_path=str(Path(tmp_dir) / "gate_report.json"),
+    )
+    gate = HallucinationCIGate(config)
+
+    print(
+        f"  GateConfig: threshold={config.threshold} sample_size={config.sample_size} "
+        f"max_reruns={config.max_reruns} rerun_pass_count={config.rerun_pass_count}"
+    )
+
+    # First run: no baseline on disk yet, so no drift check fires.
+    result = gate.run_with_rerun_policy(DEMO_TEST_SUITE)
+    gate.report(result)
+    gate.write_report(result)
+    gate.update_baseline(result.final_rate)
+    print(f"  Baseline written: {result.final_rate:.4f} -> {baseline_path}")
+
+    # Second run: simulate a model/provider change that shifts the rate.
+    # Same data, but a scorer biased +0.35 higher — this should trip the
+    # baseline-drift warning from section 3.7.3 rather than read as a
+    # plain prompt regression.
+    def _drifted_scorer(question, answer, context):
+        base = HallucinationCIGate._mock_hallucination_rate_scorer(question, answer, context)
+        return round(min(base + 0.35, 1.0), 4)
+
+    drift_gate = HallucinationCIGate(config, scorer=_drifted_scorer)
+    drift_result = drift_gate.run_with_rerun_policy(DEMO_TEST_SUITE)
+    print("\n  --- Second run: simulated model/provider change ---")
+    drift_gate.report(drift_result)
+
+    gate.enforce(result, exit_on_fail=False)
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Chapter 4 companion — CI/CD hallucination containment demos"
+        description="Chapter 3 companion — CI/CD hallucination containment demos"
     )
-    parser.add_argument("--gate", action="store_true", help="Run CI gate demo")
+    parser.add_argument("--gate", action="store_true", help="Run CI gate demo (Listing 3.2)")
+    parser.add_argument(
+        "--ci-gate", action="store_true",
+        help="Run full CI/CD gate demo: config, re-run policy, baseline drift (Listing 3.7)",
+    )
     parser.add_argument("--consistency", action="store_true", help="Run self-consistency demo")
     parser.add_argument("--claims", action="store_true", help="Run claim decomposition demo")
     parser.add_argument("--shadow", action="store_true", help="Run shadow traffic demo")
@@ -853,9 +1311,11 @@ def main() -> None:
     args = parser.parse_args()
 
     # If no flags given, run everything
-    run_all = not any([args.gate, args.consistency, args.claims, args.shadow, args.gen_yaml])
+    run_all = not any([
+        args.gate, args.ci_gate, args.consistency, args.claims, args.shadow, args.gen_yaml,
+    ])
 
-    print("\nChapter 4: Containing Hallucinations — Wiring Detection into CI/CD")
+    print("\nChapter 3: Containing Hallucinations as a CI/CD-Blocking Metric")
     print("Hardening LLM Systems in Production — Companion Code")
     print("=" * 60)
 
@@ -882,6 +1342,10 @@ def main() -> None:
                 fh, indent=2,
             )
         print("  gate_report.json written.")
+
+    if args.ci_gate or run_all:
+        print("\n--- Full CI/CD Gate Demo (Listing 3.7) ---")
+        _demo_ci_gate()
 
     if args.consistency or run_all:
         print("\n--- Self-Consistency Demo ---")

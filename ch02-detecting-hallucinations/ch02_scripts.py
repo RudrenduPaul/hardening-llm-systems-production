@@ -1,30 +1,36 @@
 """
-Chapter 3: Detecting Hallucinations Before Your Users Do
+Chapter 2: Detecting Hallucinations Before Your Users Do
 Hardening LLM Systems in Production — Companion Code
 Author: Rudrendu Paul | https://orcid.org/0009-0008-0141-4690
 
 Implements:
+  - Chain-of-thought drift detection (embedding similarity)
+  - BERTScore computation
   - HallucinationMetric wrapper around deepeval
   - RAGAS faithfulness scoring pipeline
   - CombinedHallucinationScorer (ensemble of both)
+  - LLM-as-judge sycophancy calibration
   - Inter-rater reliability via Cohen's kappa
   - Statistical power analysis for sample size planning
+  - HallucinationGate: CI/CD gate-compatible scorer wrapper
 
 Requirements:
     deepeval==0.21.7
     ragas==0.1.21
     scikit-learn>=1.3.0,<2.0
     scipy>=1.11.0,<2.0
+    numpy>=1.24.0,<2.0
+    bert-score>=0.3.13,<1.0
     datasets>=2.14.0,<3.0
     openai>=1.0.0,<2.0
     langchain>=0.1.0,<1.0
     langchain-openai>=0.0.5,<1.0
 
 Usage:
-    python ch03_scripts.py
-    python ch03_scripts.py --demo faithfulness
-    python ch03_scripts.py --demo kappa
-    python ch03_scripts.py --demo power
+    python ch02_scripts.py
+    python ch02_scripts.py --demo faithfulness
+    python ch02_scripts.py --demo kappa
+    python ch02_scripts.py --demo power
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ import argparse
 import json
 import math
 import warnings
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -75,9 +82,164 @@ try:
 except ImportError:
     _SCIPY_AVAILABLE = False
 
+try:
+    import numpy as np
+    _NUMPY_AVAILABLE = True
+except ImportError:
+    _NUMPY_AVAILABLE = False
+
+try:
+    import openai as _openai
+    # Embeddings calls need OPENAI_API_KEY too; treat missing key as unavailable
+    _OPENAI_EMBEDDINGS_AVAILABLE = bool(_os.environ.get("OPENAI_API_KEY"))
+except ImportError:
+    _OPENAI_EMBEDDINGS_AVAILABLE = False
+
+try:
+    from bert_score import score as _bert_score_fn
+    _BERTSCORE_AVAILABLE = True
+except ImportError:
+    _BERTSCORE_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
-# 1. deepeval HallucinationMetric wrapper
+# 1. Chain-of-thought drift detection (section 2.2.5)
+# ---------------------------------------------------------------------------
+
+def detect_cot_drift(
+    final_reasoning_step: str,
+    conclusion: str,
+    drift_threshold: float = 0.82,
+) -> dict:
+    """
+    Compare the semantic content of the final CoT step against the
+    model's conclusion. A similarity below the threshold signals drift.
+
+    Args:
+        final_reasoning_step: The last step in the model's chain of thought.
+        conclusion: The model's final answer or decision.
+        drift_threshold: Cosine similarity below which we flag drift.
+                         The 0.82 default is derived from the authors'
+                         production deployments across contract-analysis
+                         and legal-research tasks; it is not sourced from
+                         a published benchmark. Run the power analysis in
+                         section 2.7 against your domain's CoT pairs to
+                         calibrate your own threshold before using it as
+                         a gate.
+
+    Returns:
+        dict with similarity score, drift flag, and both inputs.
+    """
+    if not (_NUMPY_AVAILABLE and _OPENAI_EMBEDDINGS_AVAILABLE):
+        return _mock_cot_drift(final_reasoning_step, conclusion, drift_threshold)
+
+    client = _openai.OpenAI()
+    resp = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=[final_reasoning_step, conclusion],
+    )
+    vec_reasoning = np.array(resp.data[0].embedding)
+    vec_conclusion = np.array(resp.data[1].embedding)
+
+    similarity = float(
+        np.dot(vec_reasoning, vec_conclusion)
+        / (np.linalg.norm(vec_reasoning) * np.linalg.norm(vec_conclusion))
+    )
+
+    return {
+        "similarity": round(similarity, 4),
+        "drift_detected": similarity < drift_threshold,
+        "drift_threshold": drift_threshold,
+        "final_reasoning_step": final_reasoning_step,
+        "conclusion": conclusion,
+    }
+
+
+def _mock_cot_drift(
+    final_reasoning_step: str, conclusion: str, drift_threshold: float
+) -> dict:
+    """Deterministic mock CoT drift check when numpy/openai (or
+    OPENAI_API_KEY) are not available. Uses word-overlap similarity in
+    place of embedding cosine similarity. NOT a substitute for the real
+    embedding-based comparison — install numpy and openai, and set
+    OPENAI_API_KEY, for real scoring."""
+    reasoning_words = set(final_reasoning_step.lower().split())
+    conclusion_words = set(conclusion.lower().split())
+    union = reasoning_words | conclusion_words
+    similarity = (
+        len(reasoning_words & conclusion_words) / len(union) if union else 0.0
+    )
+    return {
+        "similarity": round(similarity, 4),
+        "drift_detected": similarity < drift_threshold,
+        "drift_threshold": drift_threshold,
+        "final_reasoning_step": final_reasoning_step,
+        "conclusion": conclusion,
+        "reason": "[MOCK — install numpy and openai, and set OPENAI_API_KEY, "
+                  "for real embedding-based scoring]",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 2. BERTScore computation (section 2.4.1)
+# ---------------------------------------------------------------------------
+
+def compute_bertscore(candidates: list[str], references: list[str]) -> list[dict]:
+    """
+    Compute BERTScore for a list of candidate-reference pairs.
+
+    Args:
+        candidates: Generated outputs to evaluate.
+        references: Ground-truth reference texts.
+
+    Returns:
+        List of dicts with precision, recall, and F1 per pair.
+    """
+    if not _BERTSCORE_AVAILABLE:
+        return _mock_bertscore(candidates, references)
+
+    P, R, F1 = _bert_score_fn(
+        candidates,
+        references,
+        lang="en",
+        model_type="roberta-large",
+        verbose=False,
+    )
+    return [
+        {
+            "candidate": c,
+            "reference": r,
+            "precision": round(p.item(), 4),
+            "recall": round(rc.item(), 4),
+            "f1": round(f.item(), 4),
+        }
+        for c, r, p, rc, f in zip(candidates, references, P, R, F1)
+    ]
+
+
+def _mock_bertscore(candidates: list[str], references: list[str]) -> list[dict]:
+    """Deterministic mock BERTScore (word-overlap Jaccard) when bert-score
+    is not installed. NOT a substitute for the real contextual-embedding
+    metric — see section 2.4.1 for why token overlap misses the factual
+    inversions BERTScore itself also misses."""
+    results = []
+    for c, r in zip(candidates, references):
+        c_words = set(c.lower().split())
+        r_words = set(r.lower().split())
+        union = c_words | r_words
+        jaccard = len(c_words & r_words) / len(union) if union else 0.0
+        results.append({
+            "candidate": c,
+            "reference": r,
+            "precision": round(jaccard, 4),
+            "recall": round(jaccard, 4),
+            "f1": round(jaccard, 4),
+        })
+    return results
+
+
+# ---------------------------------------------------------------------------
+# 3. deepeval HallucinationMetric wrapper (section 2.5.1)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -86,7 +248,7 @@ class HallucinationResult:
     input: str
     actual_output: str
     context: list[str]
-    score: float          # 0.0 = hallucinated, 1.0 = faithful
+    score: float          # 0.0 = faithful, 1.0 = hallucinated (higher = more hallucinated)
     passed: bool
     reason: str
     metric_name: str = "HallucinationMetric"
@@ -102,7 +264,8 @@ class HallucinationMetric:
     Parameters
     ----------
     threshold : float
-        Minimum faithfulness score required to pass. Default 0.5.
+        Maximum hallucination score allowed to pass (score is 0.0 =
+        faithful, 1.0 = hallucinated, so lower is better). Default 0.5.
     model : str
         Judge model passed to deepeval. Default "gpt-4o".
     """
@@ -179,13 +342,14 @@ class HallucinationMetric:
             )
         return results
 
-    @staticmethod
     def _mock_result(
-        input_text: str, actual_output: str, context: list[str]
+        self, input_text: str, actual_output: str, context: list[str]
     ) -> HallucinationResult:
         """Return a deterministic mock result when deepeval is not installed."""
-        # Simple heuristic: if the output contains words from the context it is
-        # more likely faithful. This is NOT a substitute for the real metric.
+        # Simple heuristic: the less the output's vocabulary is grounded in
+        # the context, the more likely it is hallucinated. Score follows the
+        # real deepeval polarity: 0.0 = faithful, 1.0 = hallucinated (higher
+        # is worse). This is NOT a substitute for the real metric.
         context_words = set(
             word.lower()
             for passage in context
@@ -193,13 +357,14 @@ class HallucinationMetric:
         )
         output_words = set(actual_output.lower().split())
         overlap = len(context_words & output_words)
-        score = min(1.0, overlap / max(len(output_words), 1))
+        grounded_ratio = min(1.0, overlap / max(len(output_words), 1))
+        score = round(1.0 - grounded_ratio, 3)
         return HallucinationResult(
             input=input_text,
             actual_output=actual_output,
             context=context,
-            score=round(score, 3),
-            passed=score >= 0.5,
+            score=score,
+            passed=score <= self.threshold,
             reason="[MOCK — install deepeval==0.21.7 for real scoring]",
         )
 
@@ -216,8 +381,41 @@ class HallucinationMetric:
         }
 
 
+def score_hallucination_deepeval(
+    user_input: str,
+    actual_output: str,
+    context_documents: list[str],
+    threshold: float = 0.7,
+) -> dict:
+    """
+    Score a single LLM response for hallucination using deepeval.
+
+    Listing 2.3 companion function — a thin functional wrapper around
+    HallucinationMetric for readers following the book's inline code
+    style; delegates to the same underlying deepeval integration.
+
+    Args:
+        user_input: The original user query.
+        actual_output: The LLM's generated response to score.
+        context_documents: The authoritative source documents retrieved
+                           for this query (not the LLM's retrieved context,
+                           but the ground-truth authoritative content).
+        threshold: Maximum hallucination score allowed to pass.
+
+    Returns:
+        dict with keys: score, passed, reason
+    """
+    metric = HallucinationMetric(threshold=threshold, model="gpt-4o")
+    result = metric.score(
+        input_text=user_input,
+        actual_output=actual_output,
+        context=context_documents,
+    )
+    return {"score": result.score, "passed": result.passed, "reason": result.reason}
+
+
 # ---------------------------------------------------------------------------
-# 2. RAGAS faithfulness scoring pipeline
+# 4. RAGAS faithfulness scoring pipeline (section 2.5.2)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -328,17 +526,48 @@ class RAGASPipeline:
         )
 
 
+def score_faithfulness_ragas(
+    questions: list[str],
+    answers: list[str],
+    contexts: list[list[str]],
+) -> dict:
+    """
+    Score a batch of LLM responses for faithfulness using RAGAS.
+
+    Listing 2.4 companion function — a thin functional wrapper around
+    RAGASPipeline for readers following the book's inline code style.
+
+    RAGAS faithfulness decomposes each answer into atomic claims and
+    checks each claim against the provided contexts. The score is the
+    fraction of claims that are supported.
+
+    Args:
+        questions: List of original user queries.
+        answers: List of LLM-generated answers to score.
+        contexts: List of context document lists. Each entry is a list
+                  of strings representing the grounding documents for
+                  the corresponding question/answer pair.
+
+    Returns:
+        dict with 'faithfulness' (the dataset-mean faithfulness score)
+        and 'n_samples' (the number of samples evaluated).
+    """
+    pipeline = RAGASPipeline(metrics=["faithfulness"])
+    result = pipeline.evaluate(questions=questions, answers=answers, contexts=contexts)
+    return {"faithfulness": result.faithfulness_score, "n_samples": result.n_samples}
+
+
 # ---------------------------------------------------------------------------
-# 3. CombinedHallucinationScorer — ensemble of deepeval + RAGAS
+# 5. CombinedHallucinationScorer — ensemble of deepeval + RAGAS (section 2.5.3)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class CombinedScore:
     """Ensemble hallucination score combining deepeval and RAGAS."""
-    deepeval_score: float
-    ragas_faithfulness: float
-    combined_score: float
-    passed: bool
+    deepeval_score: float          # 0-1; higher = more hallucinated
+    ragas_faithfulness: float      # 0-1; higher = more faithful (inverse polarity)
+    combined_score: float          # 0-1; higher = higher hallucination risk
+    passed: bool                   # True when combined_score <= threshold
     threshold: float
     weights: tuple[float, float]   # (deepeval_weight, ragas_weight)
     details: dict = field(default_factory=dict)
@@ -360,7 +589,8 @@ class CombinedHallucinationScorer:
         Weight assigned to RAGAS faithfulness (0–1). Default 0.4.
         deepeval_weight + ragas_weight must equal 1.0.
     threshold : float
-        Minimum combined score to pass. Default 0.7.
+        Maximum acceptable combined risk score to pass (0 = no risk,
+        1 = maximum risk, so lower is better). Default 0.7.
     deepeval_model : str
         Judge model for deepeval. Default "gpt-4o".
     """
@@ -423,9 +653,13 @@ class CombinedHallucinationScorer:
             ground_truths=gts,
         )
 
+        # deepeval's score is already "higher = more hallucinated." RAGAS
+        # faithfulness is "higher = more faithful," so it must be inverted
+        # to (1 - faithfulness) before combining, or the two signals point
+        # in opposite directions and the sum is meaningless.
         combined = (
             self.weights[0] * de_result.score
-            + self.weights[1] * ragas_result.faithfulness_score
+            + self.weights[1] * (1 - ragas_result.faithfulness_score)
         )
         combined = round(combined, 4)
 
@@ -433,7 +667,7 @@ class CombinedHallucinationScorer:
             deepeval_score=de_result.score,
             ragas_faithfulness=ragas_result.faithfulness_score,
             combined_score=combined,
-            passed=combined >= self.threshold,
+            passed=combined <= self.threshold,
             threshold=self.threshold,
             weights=self.weights,
             details={
@@ -444,7 +678,91 @@ class CombinedHallucinationScorer:
 
 
 # ---------------------------------------------------------------------------
-# 4. Cohen's kappa for inter-rater reliability
+# 6. LLM-as-judge sycophancy calibration (section 2.5.4)
+# ---------------------------------------------------------------------------
+
+def build_sycophancy_pairs(
+    correct_answers: list[str],
+    incorrect_answers: list[str],
+    context: str,
+    question: str,
+) -> list[dict]:
+    """
+    Build adversarial calibration pairs.
+
+    Each pair contains:
+      - tentative_correct: a correct answer with hedging language
+      - confident_wrong: an incorrect answer stated confidently
+    """
+    pairs = []
+    for correct, incorrect in zip(correct_answers, incorrect_answers):
+        pairs.append(
+            {
+                "question": question,
+                "context": context,
+                "tentative_correct": f"I believe {correct.lower()}, though you may want to verify.",
+                "confident_wrong": f"{incorrect} This is confirmed policy.",
+            }
+        )
+    return pairs
+
+
+def measure_sycophancy_rate(
+    pairs: list[dict],
+    judge: HallucinationMetric | None = None,
+) -> dict:
+    """
+    Measure how often an LLM-as-judge favors a confidently wrong answer
+    over a correctly hedged one.
+
+    For each adversarial pair built by build_sycophancy_pairs(), scores
+    both the tentative-but-correct and the confident-but-wrong variants
+    with the same judge and counts how often the judge rates the
+    confident wrong answer as LESS hallucinated (a lower score, since
+    higher = more hallucinated) than the correct-but-hedged one. That
+    inversion is a sycophancy event: the judge is rewarding confidence
+    over accuracy.
+
+    Args:
+        pairs: Adversarial pairs from build_sycophancy_pairs(), each with
+               'question', 'context', 'tentative_correct', and
+               'confident_wrong' keys.
+        judge: A HallucinationMetric instance to use as the judge.
+               Defaults to a fresh HallucinationMetric(threshold=0.5).
+
+    Returns:
+        dict with 'sycophancy_rate', 'n_pairs', 'n_sycophantic', and
+        'flagged_pairs' (indexes where the judge favored confidence over
+        accuracy).
+    """
+    judge = judge or HallucinationMetric(threshold=0.5)
+    n = len(pairs)
+    flagged = []
+    for i, pair in enumerate(pairs):
+        context = [pair["context"]]
+        correct_result = judge.score(
+            input_text=pair["question"],
+            actual_output=pair["tentative_correct"],
+            context=context,
+        )
+        wrong_result = judge.score(
+            input_text=pair["question"],
+            actual_output=pair["confident_wrong"],
+            context=context,
+        )
+        if wrong_result.score < correct_result.score:
+            flagged.append(i)
+
+    return {
+        "sycophancy_rate": round(len(flagged) / n, 4) if n else 0.0,
+        "n_pairs": n,
+        "n_sycophantic": len(flagged),
+        "flagged_pairs": flagged,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 7. Cohen's kappa for inter-rater reliability (section 2.6.3)
 # ---------------------------------------------------------------------------
 
 def compute_cohens_kappa(
@@ -528,8 +846,53 @@ def _interpret_kappa(k: float) -> str:
     return "Almost perfect"
 
 
+def compute_inter_rater_kappa(
+    rater_a_labels: list[int],
+    rater_b_labels: list[int],
+    weights: str | None = None,
+) -> dict:
+    """
+    Compute Cohen's kappa between two annotators, with a diagnostic
+    breakdown of where they disagree.
+
+    Listing 2.7 companion function — wraps compute_cohens_kappa() and
+    adds the raw agreement rate plus a disagreement_types breakdown used
+    to steer annotation-guideline revisions (see section 2.6.3).
+
+    Args:
+        rater_a_labels: Integer labels from annotator A.
+                        For binary factuality: 0 = hallucinated, 1 = correct.
+                        For graded: 0 = hallucinated, 1 = partial, 2 = correct.
+        rater_b_labels: Integer labels from annotator B (same schema).
+        weights: None for unweighted kappa (binary tasks),
+                 'linear' or 'quadratic' for ordinal/graded labels.
+
+    Returns:
+        dict with kappa, n, interpretation, acceptable_for_ci_gate,
+        raw_agreement, and disagreement_types (a count of
+        (rater_a_label, rater_b_label) pairs where the two disagreed).
+    """
+    assert len(rater_a_labels) == len(rater_b_labels), (
+        "Both raters must label the same number of examples."
+    )
+
+    result = compute_cohens_kappa(rater_a_labels, rater_b_labels, weights=weights)
+
+    n = len(rater_a_labels)
+    raw_agreement = sum(
+        1 for a, b in zip(rater_a_labels, rater_b_labels) if a == b
+    )
+    disagreement_types = Counter(
+        (a, b) for a, b in zip(rater_a_labels, rater_b_labels) if a != b
+    )
+
+    result["raw_agreement"] = round(raw_agreement / n, 4) if n else 0.0
+    result["disagreement_types"] = dict(disagreement_types)
+    return result
+
+
 # ---------------------------------------------------------------------------
-# 5. Power analysis for sample size planning
+# 8. Power analysis for sample size planning (section 2.7)
 # ---------------------------------------------------------------------------
 
 def compute_sample_size(
@@ -602,6 +965,124 @@ def compute_sample_size(
             f"with {power:.0%} power at alpha={alpha}."
         ),
     }
+
+
+def hallucination_rate_power_analysis(
+    baseline_rate: float,
+    minimum_detectable_shift: float,
+    alpha: float = 0.05,
+    power: float = 0.80,
+) -> dict:
+    """
+    Compute the sample size required to detect a shift in hallucination
+    rate with the specified statistical power.
+
+    Listing 2.8 companion function — wraps compute_sample_size() using
+    the parameter name used in the chapter text (minimum_detectable_shift
+    instead of minimum_detectable_effect). Uses the two-proportion z-test
+    formula for sample size estimation; the test is two-tailed (we care
+    about both increases and decreases).
+
+    Args:
+        baseline_rate: Expected hallucination rate at baseline (0 to 1).
+                       Example: 0.05 for a 5% baseline hallucination rate.
+        minimum_detectable_shift: The smallest shift in rate you want to
+                                  reliably detect. Example: 0.02 to detect
+                                  a 2-percentage-point shift (from 5% to 7%).
+        alpha: Type I error rate (significance level). Default 0.05.
+        power: Desired statistical power (1 - Type II error rate).
+               Default 0.80.
+
+    Returns:
+        dict with required sample size per group and interpretation.
+        See compute_sample_size() for the full field list.
+    """
+    return compute_sample_size(
+        baseline_rate=baseline_rate,
+        minimum_detectable_effect=minimum_detectable_shift,
+        alpha=alpha,
+        power=power,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. CI/CD gate wrapper (section 2.8, Listing 2.9)
+# ---------------------------------------------------------------------------
+
+class HallucinationGate:
+    """
+    Gate-compatible hallucination scorer wrapper for CI/CD pipelines.
+
+    Wraps a scorer (by default CombinedHallucinationScorer) exposing a
+    `.score()` method that returns an object with a numeric
+    hallucination-risk score, and turns it into a CI-gate-compatible
+    batch check. Satisfies the three contracts described in section 2.8:
+
+      1. Accepts a batch of (prompt, response) pairs and returns a
+         structured result, not just a float.
+      2. Supports a configurable threshold so teams can tighten or
+         relax the bar without touching the scoring code.
+      3. Exposes exit_code(), which is non-zero when the batch fail
+         rate exceeds the threshold, so a pipeline runner can treat it
+         as a gate failure.
+
+    Parameters
+    ----------
+    scorer : object
+        Any object exposing score(question=..., answer=..., context=...)
+        -> an object with a `combined_score` or `score` attribute, where
+        higher = more hallucination risk (e.g. CombinedHallucinationScorer
+        or HallucinationMetric).
+    threshold : float
+        Maximum acceptable hallucination/risk score. A pair scoring above
+        this threshold counts as a gate failure.
+    """
+
+    def __init__(self, scorer, threshold: float = 0.5) -> None:
+        self.scorer = scorer
+        self.threshold = threshold
+
+    def _score_pair(self, prompt: str, response: str, context: list[str] | None = None):
+        """Score one (prompt, response) pair, tolerating both
+        CombinedHallucinationScorer- and HallucinationMetric-style
+        `.score()` signatures."""
+        try:
+            return self.scorer.score(question=prompt, answer=response, context=context or [])
+        except TypeError:
+            return self.scorer.score(input_text=prompt, actual_output=response, context=context or [])
+
+    def run(self, pairs: list[dict]) -> dict:
+        """
+        Run the gate over a batch of (prompt, response) pairs.
+
+        Each pair dict must contain 'prompt' and 'response' keys, and may
+        contain an optional 'context' key (list[str]).
+
+        Returns
+        -------
+        dict with 'fail_rate', 'passed', and 'results' (the per-pair
+        scoring objects).
+        """
+        results = [
+            self._score_pair(p["prompt"], p["response"], p.get("context"))
+            for p in pairs
+        ]
+        risk_scores = [
+            getattr(r, "combined_score", getattr(r, "score", None)) for r in results
+        ]
+        fail_count = sum(1 for s in risk_scores if s is not None and s > self.threshold)
+        fail_rate = round(fail_count / len(results), 4) if results else 0.0
+        return {
+            "fail_rate": fail_rate,
+            "passed": fail_rate == 0.0,
+            "results": results,
+        }
+
+    def exit_code(self, result: dict) -> int:
+        """Return 0 (success) if the gate passed, 1 (failure) otherwise —
+        the code a CI/CD pipeline step checks to decide whether to block
+        the merge."""
+        return 0 if result["passed"] else 1
 
 
 # ---------------------------------------------------------------------------
@@ -698,7 +1179,7 @@ def run_faithfulness_demo() -> None:
     print(f"  deepeval score     : {combined.deepeval_score:.4f}")
     print(f"  RAGAS faithfulness : {combined.ragas_faithfulness:.4f}")
     print(f"  Combined score     : {combined.combined_score:.4f}")
-    print(f"  Passed (>={combined.threshold})   : {combined.passed}")
+    print(f"  Passed (<={combined.threshold})   : {combined.passed}")
 
 
 def run_kappa_demo() -> None:
@@ -749,7 +1230,7 @@ def run_power_demo() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Chapter 3 companion — hallucination detection demos"
+        description="Chapter 2 companion — hallucination detection demos"
     )
     parser.add_argument(
         "--demo",
@@ -759,7 +1240,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    print("\nChapter 3: Detecting Hallucinations Before Your Users Do")
+    print("\nChapter 2: Detecting Hallucinations Before Your Users Do")
     print("Hardening LLM Systems in Production — Companion Code")
     print("=" * 60)
 

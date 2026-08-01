@@ -4,8 +4,10 @@ Hardening LLM Systems in Production — Companion Code
 Author: Rudrendu Paul | https://orcid.org/0009-0008-0141-4690
 
 This module implements the HardeningReport self-diagnostic scorecard: 25 yes/no questions
-across 5 hardening vectors. Run it against any LLM-powered system to get a readiness score
-and a prioritized remediation plan before incidents occur in production.
+across 5 hardening vectors (hallucination containment, adversarial hardening, agentic
+safety, data leakage prevention, compliance readiness — section 1.7). Run it against any
+LLM-powered system to get a 0-25 exposure score and a prioritized remediation plan before
+incidents occur in production.
 
 Requirements:
     python>=3.11
@@ -25,6 +27,7 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional
 
 
@@ -32,197 +35,153 @@ from typing import Optional
 # Data model
 # ---------------------------------------------------------------------------
 
-HARDENING_VECTORS = [
-    "Hallucination & Factuality",
-    "Prompt Injection & Adversarial Inputs",
-    "Output Safety & Policy Compliance",
-    "Observability & Incident Response",
-    "Governance & Access Control",
-]
+class Exposure(str, Enum):
+    """The three exposure tiers from section 1.7.3, keyed to the 0-25 total score."""
+    CRITICAL = "Critical exposure"
+    PARTIAL = "Partial hardening"
+    DEFENSIBLE = "Defensible posture"
 
-# 25 questions: 5 per vector, in the same order as HARDENING_VECTORS
-DIAGNOSTIC_QUESTIONS: list[dict] = [
-    # --- Vector 1: Hallucination & Factuality ---
-    {
-        "id": "H1",
-        "vector": "Hallucination & Factuality",
-        "question": "Do you run an automated faithfulness metric (e.g. RAGAS, deepeval) on every model response in CI?",
-        "rationale": "Without an automated gate, hallucination regressions ship silently.",
-        "remediation": "Add a faithfulness score threshold to your CI pipeline. Chapter 2 covers deepeval + RAGAS setup.",
-    },
-    {
-        "id": "H2",
-        "vector": "Hallucination & Factuality",
-        "question": "Do you track hallucination rate as a production KPI on a dashboard?",
-        "rationale": "You cannot improve what you do not measure in the live environment.",
-        "remediation": "Instrument your response pipeline to log faithfulness scores; route them to Grafana or Datadog.",
-    },
-    {
-        "id": "H3",
-        "vector": "Hallucination & Factuality",
-        "question": "Do you run self-consistency checks (sample N responses, compare) for high-stakes outputs?",
-        "rationale": "A single forward pass is insufficient evidence that a claim is reliable.",
-        "remediation": "Use the SelfConsistencyChecker from Chapter 3 on any output that triggers a real-world action.",
-    },
-    {
-        "id": "H4",
-        "vector": "Hallucination & Factuality",
-        "question": "Do you decompose compound claims into atomic assertions before scoring?",
-        "rationale": "Composite answers hide per-claim accuracy. A response can be 80% correct and catastrophically wrong.",
-        "remediation": "Implement the ClaimDecompositionPipeline from Chapter 3.",
-    },
-    {
-        "id": "H5",
-        "vector": "Hallucination & Factuality",
-        "question": "Do you maintain a regression test suite of known hallucination cases?",
-        "rationale": "Fixed hallucinations re-emerge after model updates or prompt changes without a regression suite.",
-        "remediation": "Collect every production hallucination into a golden test set. Run it on every deployment.",
-    },
-    # --- Vector 2: Prompt Injection & Adversarial Inputs ---
-    {
-        "id": "P1",
-        "vector": "Prompt Injection & Adversarial Inputs",
-        "question": "Do you scan user inputs for direct prompt injection patterns before they reach the model?",
-        "rationale": "User-controlled text entering the system prompt is the most common attack surface.",
-        "remediation": "Add an injection classifier layer. Chapter 4 covers detection approaches and open-source libraries.",
-    },
-    {
-        "id": "P2",
-        "vector": "Prompt Injection & Adversarial Inputs",
-        "question": "Do you sanitize or constrain tool-call arguments returned by the model before execution?",
-        "rationale": "Models can be induced to emit malicious tool arguments. Validation is mandatory before execution.",
-        "remediation": "Parse and validate all tool call payloads against a strict schema before invoking downstream APIs.",
-    },
-    {
-        "id": "P3",
-        "vector": "Prompt Injection & Adversarial Inputs",
-        "question": "Do you apply structural separation between system instructions and user content in the prompt?",
-        "rationale": "Embedding user content inside the system prompt makes injection trivially easy.",
-        "remediation": "Use the multi-turn message format with explicit role boundaries; never f-string user input into system prompts.",
-    },
-    {
-        "id": "P4",
-        "vector": "Prompt Injection & Adversarial Inputs",
-        "question": "Do you red-team your prompts quarterly for jailbreak and indirect injection vulnerabilities?",
-        "rationale": "Prompt injection attack techniques evolve continuously; static defenses decay.",
-        "remediation": "Schedule a red-team sprint using the framework in Chapter 6.",
-    },
-    {
-        "id": "P5",
-        "vector": "Prompt Injection & Adversarial Inputs",
-        "question": "Do you monitor for anomalous token patterns or unusually long inputs in production traffic?",
-        "rationale": "Many injection attempts include unusual prompt structures detectable by statistical monitoring.",
-        "remediation": "Add input-length percentile alerts and token-pattern anomaly detection to your ingress layer.",
-    },
-    # --- Vector 3: Output Safety & Policy Compliance ---
-    {
-        "id": "O1",
-        "vector": "Output Safety & Policy Compliance",
-        "question": "Do you run outputs through a policy classifier (e.g. LlamaGuard or custom classifier) before returning to users?",
-        "rationale": "Base models and fine-tunes produce policy-violating outputs under adversarial and benign inputs.",
-        "remediation": "Wrap model inference with a classifier layer. Set up alerts for any policy violation above threshold.",
-    },
-    {
-        "id": "O2",
-        "vector": "Output Safety & Policy Compliance",
-        "question": "Do you have a documented and tested fallback response for every safety refusal category?",
-        "rationale": "Unclear or overly terse refusals damage user experience and invite bypass attempts.",
-        "remediation": "Write explicit fallback copy for each refusal category. A/B test fallback acceptance rates.",
-    },
-    {
-        "id": "O3",
-        "vector": "Output Safety & Policy Compliance",
-        "question": "Do you scan outputs for PII (names, email, phone, SSN) before returning them to clients?",
-        "rationale": "Models memorize and reproduce training data. PII leakage is both a compliance and a trust failure.",
-        "remediation": "Deploy a PII detector in the output path. Chapter 9 covers detection and redaction pipelines.",
-    },
-    {
-        "id": "O4",
-        "vector": "Output Safety & Policy Compliance",
-        "question": "Do you store output safety violation logs for audit and model improvement?",
-        "rationale": "Violations logged only as metrics cannot be used for targeted retraining or policy refinement.",
-        "remediation": "Log the full prompt-response pair (with user consent where required) to a secured audit store.",
-    },
-    {
-        "id": "O5",
-        "vector": "Output Safety & Policy Compliance",
-        "question": "Do you have a circuit-breaker that halts model traffic if violation rate exceeds a threshold?",
-        "rationale": "Safety regressions introduced by model updates can spike violation rates before any human reviews logs.",
-        "remediation": "Implement a sliding-window violation rate alarm with automated traffic kill-switch capability.",
-    },
-    # --- Vector 4: Observability & Incident Response ---
-    {
-        "id": "I1",
-        "vector": "Observability & Incident Response",
-        "question": "Do you emit structured logs (prompt, response, latency, model version, user_id) for every LLM call?",
-        "rationale": "Unstructured logs make post-incident forensics slow and often impossible.",
-        "remediation": "Add a structured logging wrapper to every model call. Include a trace_id for distributed tracing.",
-    },
-    {
-        "id": "I2",
-        "vector": "Observability & Incident Response",
-        "question": "Do you have a runbook for LLM incidents (hallucination spike, injection detected, PII leak)?",
-        "rationale": "Incident response improvised under pressure is slower and makes more mistakes than a rehearsed runbook.",
-        "remediation": "Write and drill a runbook for your top 3 incident types. Chapter 8 provides a template.",
-    },
-    {
-        "id": "I3",
-        "vector": "Observability & Incident Response",
-        "question": "Do you track model latency p50, p95, and p99 and alert on degradation?",
-        "rationale": "Latency spikes often precede or accompany quality degradation, especially under load.",
-        "remediation": "Add latency percentile dashboards and SLO-linked alerts.",
-    },
-    {
-        "id": "I4",
-        "vector": "Observability & Incident Response",
-        "question": "Do you use shadow traffic to test new model versions against production traffic before cutover?",
-        "rationale": "Lab evaluations miss the long tail of production inputs that trigger edge-case failures.",
-        "remediation": "Implement the ShadowTrafficHarness from Chapter 3 to mirror a percentage of live traffic to candidate models.",
-    },
-    {
-        "id": "I5",
-        "vector": "Observability & Incident Response",
-        "question": "Do you have a rollback procedure (tested) to revert to a prior model version within 15 minutes?",
-        "rationale": "Novel model versions can degrade quality or safety suddenly; rollback speed is a critical SLO.",
-        "remediation": "Version your model endpoints and test the rollback procedure quarterly.",
-    },
-    # --- Vector 5: Governance & Access Control ---
-    {
-        "id": "G1",
-        "vector": "Governance & Access Control",
-        "question": "Do you maintain a model registry that records which model version is serving each endpoint in production?",
-        "rationale": "Without a registry, incidents cannot be correlated with model versions, making root cause analysis guesswork.",
-        "remediation": "Adopt a lightweight model registry (e.g. MLflow, DVC, or a version tag in your config store).",
-    },
-    {
-        "id": "G2",
-        "vector": "Governance & Access Control",
-        "question": "Do you apply least-privilege access controls so the model can only call the tools it needs for each task?",
-        "rationale": "Overly permissive tool grants amplify the blast radius of a prompt injection or model error.",
-        "remediation": "Define per-task tool allow-lists. Audit tool grants quarterly. Chapter 7 covers agentic scope containment.",
-    },
-    {
-        "id": "G3",
-        "vector": "Governance & Access Control",
-        "question": "Do you document model cards or system cards for every model in production?",
-        "rationale": "Model cards are required for EU AI Act compliance and are the baseline for responsible deployment.",
-        "remediation": "Write a model card for each production model. Chapter 10 provides an EU AI Act aligned template.",
-    },
-    {
-        "id": "G4",
-        "vector": "Governance & Access Control",
-        "question": "Do you review and approve prompt changes through a code review process before production deployment?",
-        "rationale": "Prompt changes are code changes. Unreviewed prompt edits have caused production safety incidents.",
-        "remediation": "Store system prompts in version control. Apply PR-based review gates. Chapter 11 covers the full PR gate.",
-    },
-    {
-        "id": "G5",
-        "vector": "Governance & Access Control",
-        "question": "Do you have a designated AI risk owner (a person, not a team) accountable for production LLM incidents?",
-        "rationale": "Diffuse accountability means no one owns the incident until it is too late.",
-        "remediation": "Assign an AI risk owner in your incident response org chart. Include them in all production change reviews.",
-    },
-]
+
+VECTOR_LABELS: dict[str, str] = {
+    "hallucination_containment": "Hallucination containment",
+    "adversarial_hardening": "Adversarial hardening",
+    "agentic_safety": "Agentic safety",
+    "data_leakage_prevention": "Data leakage prevention",
+    "compliance_readiness": "Compliance readiness",
+}
+
+# Each vector's primary chapter(s), per section 1.7.1's vector-to-case-study mapping.
+VECTOR_CHAPTER_REFERENCE: dict[str, str] = {
+    "hallucination_containment": "Chapters 2-3",
+    "adversarial_hardening": "Chapters 4, 6",
+    "agentic_safety": "Chapter 7",
+    "data_leakage_prevention": "Chapters 5, 8",
+    "compliance_readiness": "Chapter 10",
+}
+
+# The 25 scorecard statements, five per vector, matching Listing 1.5 (section 1.7.2)
+# in the manuscript exactly.
+VECTOR_QUESTIONS: dict[str, list[str]] = {
+    "hallucination_containment": [
+        "Automated factuality evaluation (deepeval, RAGAS, or equivalent) runs against a maintained golden dataset before each release.",
+        "RAG grounding is used for factual claims, with pipeline verification that the claim appears in retrieved context.",
+        "Hallucination rate is defined as a deployment-blocking metric with a documented threshold.",
+        "Live production outputs are sampled and run through factuality evaluation on a continuous basis.",
+        "A documented rollback plan exists for a hallucination-rate spike in production.",
+    ],
+    "adversarial_hardening": [
+        "An automated red-team scan (Garak, PyRIT, Promptfoo, or equivalent) ran against the current production endpoint in the past 90 days.",
+        "Privilege separation is implemented: the LLM cannot access more resources than the current request requires.",
+        "Output filtering catches exfiltration attempt patterns before responses reach the network.",
+        "Injection detection tooling (Microsoft Prompt Shields, LLM Guard, or equivalent) runs in the request path.",
+        "A documented manual red-team playbook covers failure classes that automation misses.",
+    ],
+    "agentic_safety": [
+        "Scope enforcement for agents is implemented at the execution layer (tool-calling infrastructure), not only in the system prompt.",
+        "Agents run with minimal privilege: access only to the resources the current task requires.",
+        "Agents use stateless tool execution, without persistent memory that carries authority across sessions.",
+        "Tripwires or anomaly detection on agent action sequences trigger human review above a defined risk threshold.",
+        "A documented incident-response playbook exists specifically for agent-scope violations.",
+    ],
+    "data_leakage_prevention": [
+        "PII detection (Microsoft Presidio or equivalent) runs on inputs before they enter the LLM context.",
+        "PII detection runs on LLM outputs before they are displayed or stored.",
+        "The vector store or retrieval database is behind authentication that enforces tenant isolation.",
+        "A documented right-to-erasure implementation exists for conversation logs under GDPR and CCPA.",
+        "A data-tier security review (network reachability, authentication, access controls) has run on all databases that store LLM interaction logs.",
+    ],
+    "compliance_readiness": [
+        "The LLM application has been classified against the EU AI Act Annex III risk tiers.",
+        "The system generates and maintains the Annex IV technical documentation package.",
+        "A post-market monitoring pipeline exists with a process for detecting serious incidents within the 15-day reporting window (EU AI Act Article 73).",
+        "System controls have been mapped to the NIST AI RMF and a profile document produced.",
+        "The CI/CD pipeline includes an Annex IV artifact completeness check as a merge-blocking gate.",
+    ],
+}
+
+_VECTOR_PREFIX: dict[str, str] = {
+    "hallucination_containment": "HC",
+    "adversarial_hardening": "AH",
+    "agentic_safety": "AS",
+    "data_leakage_prevention": "DL",
+    "compliance_readiness": "CR",
+}
+
+_RATIONALE: dict[str, str] = {
+    "HC1": "Without an automated gate, hallucination regressions ship silently.",
+    "HC2": "Ungrounded procedural claims are exactly the failure that produced the Moffatt v. Air Canada ruling.",
+    "HC3": "A metric nobody blocks on is a dashboard, not a control.",
+    "HC4": "Pre-launch evaluation catches nothing that appears only under real production traffic.",
+    "HC5": "Detecting a spike without a rehearsed rollback path costs the response time that matters most.",
+    "AH1": "Prompt injection techniques evolve continuously; a scan older than a quarter is stale evidence.",
+    "AH2": "EchoLeak's blast radius was every document Copilot could read, not just the one email it processed.",
+    "AH3": "Without an output filter, a successful injection has an unobstructed path out.",
+    "AH4": "Detection at the request boundary catches attempts that privilege separation alone does not stop.",
+    "AH5": "Automated scanners miss the novel attack patterns that a structured manual review catches.",
+    "AS1": "System-prompt-only scope is advisory; the execution layer is the only enforcement with physical authority.",
+    "AS2": "Excess privilege turns a single bad tool call into a system-wide incident.",
+    "AS3": "Persistent memory that carries authority lets one session's compromise propagate into future sessions.",
+    "AS4": "Without a tripwire, an agent's out-of-scope action sequence completes before anyone notices.",
+    "AS5": "A generic incident playbook doesn't cover the specific containment steps an agent-scope violation needs.",
+    "DL1": "PII that enters the context window can be reflected back in outputs or logged downstream.",
+    "DL2": "Models can surface PII that never appeared in the current input, drawn from training data or retrieved context.",
+    "DL3": "An unauthenticated retrieval store is the exact failure that produced the DeepSeek exposure.",
+    "DL4": "A deletion request you cannot fulfill is a compliance failure, not just an engineering gap.",
+    "DL5": "Interaction logs accumulate the same sensitive content the DeepSeek exposure leaked, and rarely get the same scrutiny as the primary application database.",
+    "CR1": "Every other compliance obligation follows from the risk-tier classification.",
+    "CR2": "The technical file is what a regulator requests first after an incident, not something to assemble after the fact.",
+    "CR3": "The 15-day window starts at detection, not at documentation; a slow detection pipeline consumes the window before the compliance team sees the incident.",
+    "CR4": "Without a mapping, you cannot show a reviewer which control addresses which framework requirement.",
+    "CR5": "A documentation package that isn't enforced in CI/CD drifts out of date the first time a control changes.",
+}
+
+_REMEDIATION: dict[str, str] = {
+    "HC1": "Add a faithfulness score threshold to your CI pipeline. Chapters 2 and 3 build the detection pipeline and wire it into CI/CD.",
+    "HC2": "Force procedural answers to cite retrieved context; reject claims with no supporting passage.",
+    "HC3": "Chapter 3 wires the hallucination-rate threshold into the CI/CD gate as a merge-blocking signal.",
+    "HC4": "Sample a percentage of live outputs and route them through the same evaluation pipeline used in CI.",
+    "HC5": "Version model and prompt configurations, and rehearse the rollback procedure before you need it.",
+    "AH1": "Schedule a recurring red-team sprint using the framework Chapter 6 builds.",
+    "AH2": "Scope every retrieval and tool call to the minimum resource set the current request needs. Chapter 4 builds the architecture.",
+    "AH3": "Add an output filter that inspects responses for exfiltration patterns before they leave the application boundary.",
+    "AH4": "Deploy an injection classifier in front of the model call and log every flagged request.",
+    "AH5": "Maintain a manual red-team playbook alongside automated scans; Chapter 6 provides the structure.",
+    "AS1": "Move scope enforcement to the tool-calling infrastructure. Chapter 7 builds the execution-layer containment.",
+    "AS2": "Define per-task tool allow-lists and audit grants on a recurring schedule.",
+    "AS3": "Reset agent authority at the start of every session; never let memory grant privilege.",
+    "AS4": "Instrument agent action sequences with anomaly scoring and route high-risk sequences to human review.",
+    "AS5": "Write a dedicated agent-scope-violation runbook; Chapter 7 provides a template.",
+    "DL1": "Deploy a PII detector ahead of the model call. Chapter 8 covers detection and redaction.",
+    "DL2": "Mirror the input-side PII detector on the output path before responses reach the user or a log.",
+    "DL3": "Require authentication on every retrieval store and enforce tenant boundaries at the query layer. Chapter 5 builds this.",
+    "DL4": "Implement and test a right-to-erasure pipeline against conversation logs. Chapter 8 covers the implementation.",
+    "DL5": "Run a network-reachability and access-control review against every database storing LLM interaction data.",
+    "CR1": "Classify the application against Annex III now; Chapter 10 walks the classification process.",
+    "CR2": "Automate Annex IV artifact generation from existing CI/CD outputs. Chapter 10 builds the pipeline.",
+    "CR3": "Build monitoring that flags a serious incident automatically and starts the 15-day clock at detection.",
+    "CR4": "Produce a NIST AI RMF profile document mapping each engineering control to its framework function.",
+    "CR5": "Add an Annex IV completeness check to the merge pipeline. Chapter 10 wires this as the final gate.",
+}
+
+
+def _build_diagnostic_questions() -> list[dict]:
+    questions: list[dict] = []
+    for vector_key, statements in VECTOR_QUESTIONS.items():
+        prefix = _VECTOR_PREFIX[vector_key]
+        for i, statement in enumerate(statements, start=1):
+            qid = f"{prefix}{i}"
+            questions.append({
+                "id": qid,
+                "vector": vector_key,
+                "question": statement,
+                "rationale": _RATIONALE[qid],
+                "remediation": _REMEDIATION[qid],
+            })
+    return questions
+
+
+# 25 questions: 5 per vector, in the same order as VECTOR_QUESTIONS.
+DIAGNOSTIC_QUESTIONS: list[dict] = _build_diagnostic_questions()
 
 
 # ---------------------------------------------------------------------------
@@ -231,53 +190,39 @@ DIAGNOSTIC_QUESTIONS: list[dict] = [
 
 @dataclass
 class VectorScore:
-    name: str
-    answered_yes: int = 0
+    key: str
+    label: str
+    yes_count: int = 0
     total: int = 0
-    failed_questions: list[dict] = field(default_factory=list)
-
-    @property
-    def score(self) -> float:
-        return self.answered_yes / self.total if self.total > 0 else 0.0
+    gap_questions: list[dict] = field(default_factory=list)
 
     @property
     def score_pct(self) -> int:
-        return round(self.score * 100)
-
-    @property
-    def risk_level(self) -> str:
-        if self.score >= 0.8:
-            return "LOW"
-        if self.score >= 0.6:
-            return "MEDIUM"
-        if self.score >= 0.4:
-            return "HIGH"
-        return "CRITICAL"
-
-    @property
-    def risk_emoji(self) -> str:
-        mapping = {"LOW": "[OK]", "MEDIUM": "[WARN]", "HIGH": "[HIGH]", "CRITICAL": "[CRIT]"}
-        return mapping[self.risk_level]
+        return round(self.yes_count / self.total * 100) if self.total else 0
 
 
 @dataclass
 class HardeningReport:
     """
-    Self-diagnostic scorecard for LLM systems in production.
+    Self-diagnostic scorecard for LLM systems in production (Listing 1.5, section 1.7).
 
     Covers 25 questions across 5 hardening vectors. Each question is answered
-    yes (1) or no (0). The overall score drives a readiness band and a
-    prioritized remediation plan targeting the most dangerous gaps first.
+    yes (1) or no (0). The total (0-25) drives a 3-tier Exposure classification
+    (Critical exposure / Partial hardening / Defensible posture, section 1.7.3)
+    and a prioritized remediation plan targeting the most dangerous gaps first.
 
     Usage
     -----
     >>> report = HardeningReport()
-    >>> report.answer("H1", True)
-    >>> report.answer("H2", False)
+    >>> report.answer("HC1", True)
+    >>> report.answer("HC2", False)
     >>> print(report.summary())
 
     Or run the full interactive diagnostic:
     >>> report = HardeningReport.run_interactive()
+
+    Or build one programmatically from a pre-filled answer dict:
+    >>> report = HardeningReport.score_from_dict({"HC1": True, "HC2": False})
     """
 
     answers: dict[str, bool] = field(default_factory=dict)
@@ -289,7 +234,7 @@ class HardeningReport:
     # ------------------------------------------------------------------
 
     def answer(self, question_id: str, response: bool) -> None:
-        """Record a yes/no answer for a question ID (e.g. 'H1', 'P3')."""
+        """Record a yes/no answer for a question ID (e.g. 'HC1', 'AH3')."""
         valid_ids = {q["id"] for q in DIAGNOSTIC_QUESTIONS}
         if question_id not in valid_ids:
             raise ValueError(f"Unknown question ID '{question_id}'. Valid IDs: {sorted(valid_ids)}")
@@ -305,45 +250,108 @@ class HardeningReport:
         for q in DIAGNOSTIC_QUESTIONS:
             self.answers[q["id"]] = True
 
+    @classmethod
+    def score_from_dict(
+        cls,
+        answers: dict[str, bool],
+        system_name: str = "My LLM System",
+        assessor: str = "Unknown",
+    ) -> "HardeningReport":
+        """
+        Build a HardeningReport from a pre-filled answer dict.
+
+        The programmatic counterpart to run_interactive(): pass a dict mapping
+        question IDs (e.g. 'HC1', 'AH3') to bool answers and get back a scored
+        report with no terminal interaction. Useful for CI jobs and
+        new-feature onboarding checklists where the answers come from a
+        config file, a form submission, or another automated source rather
+        than an interactive prompt.
+
+        Parameters
+        ----------
+        answers:
+            dict mapping question IDs to bool responses. Every key is
+            validated against DIAGNOSTIC_QUESTIONS via `answer()`.
+        system_name, assessor:
+            Same metadata fields as the HardeningReport constructor.
+
+        Raises
+        ------
+        ValueError if any key in `answers` is not a valid question ID.
+        """
+        report = cls(system_name=system_name, assessor=assessor)
+        for question_id, response in answers.items():
+            report.answer(question_id, response)
+        return report
+
     # ------------------------------------------------------------------
     # Scoring
     # ------------------------------------------------------------------
 
     def _compute_vector_scores(self) -> dict[str, VectorScore]:
-        scores: dict[str, VectorScore] = {v: VectorScore(name=v) for v in HARDENING_VECTORS}
+        scores: dict[str, VectorScore] = {
+            key: VectorScore(key=key, label=VECTOR_LABELS[key]) for key in VECTOR_QUESTIONS
+        }
         for q in DIAGNOSTIC_QUESTIONS:
             vector_score = scores[q["vector"]]
             vector_score.total += 1
             answered = self.answers.get(q["id"])
             if answered is True:
-                vector_score.answered_yes += 1
+                vector_score.yes_count += 1
             elif answered is False:
-                vector_score.failed_questions.append(q)
+                vector_score.gap_questions.append(q)
         return scores
 
     @property
-    def total_score(self) -> float:
-        answered_yes = sum(1 for v in self.answers.values() if v)
-        total = len(DIAGNOSTIC_QUESTIONS)
-        return answered_yes / total if total > 0 else 0.0
+    def max_score(self) -> int:
+        return len(DIAGNOSTIC_QUESTIONS)
+
+    @property
+    def total_score(self) -> int:
+        """Total points: 1 per 'yes' answer, out of 25 (section 1.7.3)."""
+        return sum(1 for v in self.answers.values() if v)
 
     @property
     def total_score_pct(self) -> int:
-        return round(self.total_score * 100)
+        return round(self.total_score / self.max_score * 100) if self.max_score else 0
 
     @property
-    def readiness_band(self) -> str:
-        if self.total_score >= 0.80:
-            return "HARDENED"
-        if self.total_score >= 0.60:
-            return "REINFORCED"
-        if self.total_score >= 0.40:
-            return "EXPOSED"
-        return "VULNERABLE"
+    def exposure_tier(self) -> Exposure:
+        """
+        3-tier exposure classification from the 0-25 total score (section 1.7.3):
+        0-10 Critical exposure, 11-18 Partial hardening, 19-25 Defensible posture.
+        """
+        if self.total_score >= 19:
+            return Exposure.DEFENSIBLE
+        if self.total_score >= 11:
+            return Exposure.PARTIAL
+        return Exposure.CRITICAL
 
     @property
     def answered_count(self) -> int:
         return len(self.answers)
+
+    def vector_results(self) -> list[dict]:
+        """
+        Per-vector score, gap, and chapter-reference summary, in vector order.
+
+        This is the single source of truth for per-vector results —
+        HardeningReadinessReport.from_report() (Listing 1.6) consumes this
+        directly rather than re-deriving a second, parallel classification
+        from the raw answers dict (see section 1.7.5).
+        """
+        scores = self._compute_vector_scores()
+        return [
+            {
+                "key": key,
+                "label": vs.label,
+                "score": vs.yes_count,
+                "max_score": vs.total,
+                "chapter_reference": VECTOR_CHAPTER_REFERENCE[key],
+                "gaps": [q["id"] for q in vs.gap_questions],
+            }
+            for key, vs in scores.items()
+        ]
 
     # ------------------------------------------------------------------
     # Output
@@ -361,31 +369,31 @@ class HardeningReport:
         lines.append(f"  Assessor: {self.assessor}")
         lines.append(f"  Date    : {_today()}")
         lines.append("")
-        lines.append(f"  OVERALL SCORE : {self.total_score_pct}% ({self.answered_count}/25 questions answered)")
-        lines.append(f"  READINESS BAND: {self.readiness_band}")
+        lines.append(f"  OVERALL SCORE : {self.total_score}/{self.max_score} ({self.total_score_pct}%, {self.answered_count}/25 questions answered)")
+        lines.append(f"  EXPOSURE TIER : {self.exposure_tier.value}")
         lines.append("")
         lines.append("-" * 68)
         lines.append("  VECTOR SCORES")
         lines.append("-" * 68)
 
         for vs in vector_scores.values():
-            bar = _progress_bar(vs.score, width=20)
-            lines.append(f"  {vs.risk_emoji} {vs.name:<40} {bar} {vs.score_pct:>3}%  [{vs.risk_level}]")
+            bar = _progress_bar(vs.yes_count / vs.total if vs.total else 0.0, width=20)
+            lines.append(f"  {vs.label:<28} {bar} {vs.yes_count}/{vs.total}  ({vs.score_pct}%)")
 
         lines.append("")
         lines.append("-" * 68)
         lines.append("  PRIORITIZED REMEDIATION PLAN")
-        lines.append("  (ordered by vector risk, highest first)")
+        lines.append("  (ordered by vector score, lowest first)")
         lines.append("-" * 68)
 
         # Sort vectors by ascending score (worst first)
-        sorted_vectors = sorted(vector_scores.values(), key=lambda vs: vs.score)
+        sorted_vectors = sorted(vector_scores.values(), key=lambda vs: vs.yes_count)
         item_num = 1
         for vs in sorted_vectors:
-            if not vs.failed_questions:
+            if not vs.gap_questions:
                 continue
-            lines.append(f"\n  {vs.risk_emoji} {vs.name.upper()} — {vs.score_pct}% ({vs.risk_level} risk)")
-            for q in vs.failed_questions:
+            lines.append(f"\n  {vs.label.upper()} — {vs.yes_count}/{vs.total} ({vs.score_pct}%)")
+            for q in vs.gap_questions:
                 lines.append(f"    [{item_num:02d}] {q['id']}: {q['question']}")
                 lines.append(f"         Why it matters: {q['rationale']}")
                 lines.append(f"         Fix: {q['remediation']}")
@@ -400,26 +408,18 @@ class HardeningReport:
 
     def to_dict(self) -> dict:
         """Serialize the full report to a dict (JSON-serializable)."""
-        vector_scores = self._compute_vector_scores()
         return {
             "system_name": self.system_name,
             "assessor": self.assessor,
             "date": _today(),
+            "total_score": self.total_score,
+            "max_score": self.max_score,
             "overall_score_pct": self.total_score_pct,
-            "readiness_band": self.readiness_band,
+            "exposure_tier": self.exposure_tier.name,
+            "exposure_tier_label": self.exposure_tier.value,
             "answered_questions": self.answered_count,
             "total_questions": len(DIAGNOSTIC_QUESTIONS),
-            "vectors": [
-                {
-                    "name": vs.name,
-                    "score_pct": vs.score_pct,
-                    "risk_level": vs.risk_level,
-                    "answered_yes": vs.answered_yes,
-                    "total": vs.total,
-                    "gaps": [q["id"] for q in vs.failed_questions],
-                }
-                for vs in vector_scores.values()
-            ],
+            "vectors": self.vector_results(),
             "answers": self.answers,
         }
 
@@ -456,7 +456,7 @@ class HardeningReport:
         for q in DIAGNOSTIC_QUESTIONS:
             if q["vector"] != current_vector:
                 current_vector = q["vector"]
-                print(f"\n  == {current_vector.upper()} ==")
+                print(f"\n  == {VECTOR_LABELS[current_vector].upper()} ==")
 
             while True:
                 raw = input(f"  [{q['id']}] {q['question']}\n  > ").strip().lower()
@@ -492,9 +492,9 @@ def demo_report(scenario: str = "mixed") -> HardeningReport:
     Parameters
     ----------
     scenario : "mixed" | "best" | "worst"
-        "mixed" — realistic mid-stage team (default)
-        "best"  — all controls in place
-        "worst" — no controls in place
+        "mixed" — realistic mid-stage team, lands in "Partial hardening" (default)
+        "best"  — all controls in place ("Defensible posture")
+        "worst" — no controls in place ("Critical exposure")
     """
     report = HardeningReport(
         system_name="Acme Customer Support Bot v2.1",
@@ -509,18 +509,24 @@ def demo_report(scenario: str = "mixed") -> HardeningReport:
         report.answer_all_no()
         return report
 
-    # Mixed scenario: a realistic early-production LLM system
+    # Mixed scenario: a realistic early-production LLM system. Total = 12/25,
+    # which lands in the "Partial hardening" tier (11-18, section 1.7.3).
     mixed_answers: dict[str, bool] = {
-        # Hallucination: CI metric in place, dashboard not yet; no self-consistency
-        "H1": True,  "H2": False, "H3": False, "H4": False, "H5": True,
-        # Prompt injection: input scan exists, tool-arg validation missing
-        "P1": True,  "P2": False, "P3": True,  "P4": False, "P5": False,
-        # Output safety: classifier deployed, no PII scan, no circuit-breaker
-        "O1": True,  "O2": True,  "O3": False, "O4": True,  "O5": False,
-        # Observability: structured logs exist, no runbook, no shadow traffic
-        "I1": True,  "I2": False, "I3": True,  "I4": False, "I5": False,
-        # Governance: no model registry, no model card, PR gate in place
-        "G1": False, "G2": False, "G3": False, "G4": True,  "G5": False,
+        # Hallucination containment: CI check, RAG grounding, and threshold
+        # exist; no continuous production sampling, no rollback plan.
+        "HC1": True,  "HC2": True,  "HC3": True,  "HC4": False, "HC5": False,
+        # Adversarial hardening: red-team scan and manual playbook exist;
+        # no privilege separation, no output filtering, no injection tooling.
+        "AH1": True,  "AH2": False, "AH3": False, "AH4": False, "AH5": True,
+        # Agentic safety: minimal privilege and stateless execution in place;
+        # no execution-layer scope enforcement, no tripwires, no runbook.
+        "AS1": False, "AS2": True,  "AS3": True,  "AS4": False, "AS5": False,
+        # Data leakage prevention: input PII detection and store auth exist;
+        # no output-side PII scan, no right-to-erasure, no data-tier review.
+        "DL1": True,  "DL2": False, "DL3": True,  "DL4": False, "DL5": False,
+        # Compliance readiness: Annex III classification and NIST RMF mapping
+        # exist; no Annex IV package, no monitoring pipeline, no CI/CD gate.
+        "CR1": True,  "CR2": False, "CR3": False, "CR4": True,  "CR5": False,
     }
     for qid, ans in mixed_answers.items():
         report.answer(qid, ans)
@@ -1247,22 +1253,21 @@ class VectorResult:
 @_dataclass
 class HardeningReadinessReport:
     """
-    Versioned, machine-readable hardening readiness report.
+    Versioned, machine-readable hardening readiness report (Listing 1.6, section 1.7.5).
 
-    Wraps scorecard results from HardeningReport into a JSON artifact that
+    Wraps a completed HardeningReport (Listing 1.5) into a JSON artifact that
     a CI system can parse, compare over time, and include in an Annex IV
     technical file.  Each run produces a new file with the deployment ID
     and date in the filename, so the history is the audit trail.
 
     Usage
     -----
-    >>> answers = {"H1": True, "H2": False, ...}  # from HardeningReport
-    >>> report = HardeningReadinessReport.from_answers(
-    ...     answers=answers,
+    >>> report = HardeningReport.score_from_dict({"HC1": True, "HC2": False, ...})
+    >>> readiness = HardeningReadinessReport.from_report(
+    ...     report,
     ...     deployment_id="customer-rag-chatbot-prod-v2",
-    ...     assessor="Jane Smith",
     ... )
-    >>> report.save("/tmp/")
+    >>> readiness.save("/tmp/")
     """
 
     deployment_id: str
@@ -1282,78 +1287,50 @@ class HardeningReadinessReport:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_answers(
+    def from_report(
         cls,
-        answers: dict[str, bool],
+        report: "HardeningReport",
         deployment_id: str,
-        assessor: str = "Unknown",
     ) -> "HardeningReadinessReport":
         """
-        Build a HardeningReadinessReport from a completed HardeningReport answer dict.
+        Build a HardeningReadinessReport directly from a completed HardeningReport.
+
+        Consumes the HardeningReport's own vector_results() and exposure_tier
+        (Listing 1.5) rather than re-deriving a second, parallel classification
+        from the raw answers dict — the two reports must always agree, since
+        this one is built from the other's own output, not a fresh computation.
 
         Parameters
         ----------
-        answers:
-            dict mapping question IDs (e.g. "H1") to bool.
-            Typically from HardeningReport.answers after running the diagnostic.
+        report:
+            A HardeningReport instance with all 25 questions answered.
         deployment_id:
             Human-readable identifier for the deployment, e.g.
             "customer-rag-chatbot-prod-v2".
-        assessor:
-            Name of the person who completed the diagnostic.
         """
-        # Map question IDs to vectors and labels
-        _VECTOR_MAP = {
-            "H": ("hallucination_factuality", "Hallucination & Factuality", "Chapters 2–3"),
-            "P": ("prompt_injection", "Prompt Injection & Adversarial Inputs", "Chapters 4–6"),
-            "O": ("output_safety", "Output Safety & Policy Compliance", "Chapter 9"),
-            "I": ("observability", "Observability & Incident Response", "Chapters 7, 11"),
-            "G": ("governance", "Governance & Access Control", "Chapters 10–11"),
-        }
-
-        vector_scores: dict[str, dict] = {}
-        for prefix, (key, label, chapter) in _VECTOR_MAP.items():
-            qs = [qid for qid in answers if qid.startswith(prefix)]
-            yes_count = sum(1 for qid in qs if answers.get(qid))
-            gaps = [qid for qid in qs if not answers.get(qid)]
-            vector_scores[prefix] = {
-                "key": key, "label": label, "chapter": chapter,
-                "score": yes_count, "max": len(qs) if qs else 5, "gaps": gaps,
-            }
-
-        total = sum(v["score"] for v in vector_scores.values())
-        exposure = (
-            "DEFENSIBLE" if total >= 19
-            else "PARTIAL" if total >= 11
-            else "CRITICAL"
-        )
-
-        recommended = [
-            v["chapter"]
-            for v in vector_scores.values()
-            if v["score"] < 3
-        ]
-
         vectors = [
             VectorResult(
                 vector_key=v["key"],
                 label=v["label"],
                 score=v["score"],
-                max_score=v["max"],
-                chapter_reference=v["chapter"],
+                max_score=v["max_score"],
+                chapter_reference=v["chapter_reference"],
                 gaps=v["gaps"],
             )
-            for v in vector_scores.values()
+            for v in report.vector_results()
         ]
+
+        recommended = [v.chapter_reference for v in vectors if v.score < 3]
 
         return cls(
             deployment_id=deployment_id,
-            assessor=assessor,
-            total_score=total,
-            exposure_tier=exposure,
+            assessor=report.assessor,
+            total_score=report.total_score,
+            max_score=report.max_score,
+            exposure_tier=report.exposure_tier.name,
             vectors=vectors,
             recommended_chapters=recommended,
-            answers=answers,
+            answers=dict(report.answers),
         )
 
     # ------------------------------------------------------------------
