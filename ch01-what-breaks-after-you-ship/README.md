@@ -25,7 +25,7 @@ Build the **HardeningReport** self-diagnostic scorecard — a 25-question framew
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.9+
 - No external packages — this chapter uses the standard library only
 
 ## Key concepts

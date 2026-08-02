@@ -2070,17 +2070,22 @@ def build_hardened_agent(
     high_risk_tools: Optional[set] = None,
 ) -> "Any":
     """
-    Builds a LangGraph + MCP agent with three controls (Listing 11.8):
-      - MCP tool allowlist enforcement
+    Builds a hardened agent-control wrapper with three controls (Listing 11.8):
+      - Tool allowlist enforcement
       - Tool call rate limiting
       - Human approval gate for high-risk actions
+
+    `HardenedAgent` is deliberately framework-agnostic: a plain Python class
+    with a dict-based session state (`new_state()`), not a compiled
+    LangGraph `StateGraph`. Wire `scope_check`/`human_approval_gate`/
+    `request_tool_call` into whatever orchestrates your agent's reasoning
+    loop -- a LangGraph node, an MCP tool server's dispatch handler, or a
+    custom loop.
 
     Every rejected tool call is appended to `scope_violations` on the
     session state rather than silently failing, giving the security team
     visibility into what the agent tried to do but couldn't (see the prose
     following Listing 11.8).
-
-    Requires: langgraph==0.2.0, anthropic>=0.25.0
     """
     high_risk_tools = high_risk_tools or {"write_file", "send_email", "delete_record"}
 

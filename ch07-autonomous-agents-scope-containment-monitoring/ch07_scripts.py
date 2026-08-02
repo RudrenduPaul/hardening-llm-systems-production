@@ -297,6 +297,7 @@ class TrustLevelWrapper:
 
     def ingest(self, message: AgentMessage) -> AgentMessage:
         """Validate and sanitise an incoming message."""
+        self._enforce_permitted_action(message)
         if message.trust_level == TrustLevel.EXTERNAL:
             message = self._sanitise_external(message)
         elif message.trust_level == TrustLevel.AGENT:
@@ -305,6 +306,31 @@ class TrustLevelWrapper:
             self._verify_system_claim(message)
         self._log.append(message)
         return message
+
+    @staticmethod
+    def _enforce_permitted_action(msg: AgentMessage) -> None:
+        """
+        Reject a message whose declared action category falls outside the
+        set _PERMITTED_ACTIONS grants its trust level (Listing 7.3).
+
+        The action category is optional and is read from
+        ``msg.metadata["action"]``: a caller that wants a message's
+        action checked against the trust level sets this key to one of
+        "read", "write", "irreversible", or "outbound" before calling
+        ingest(). Messages that carry no declared action (most content
+        messages) skip this check and fall through to the per-trust-level
+        handling below.
+        """
+        action = msg.metadata.get("action")
+        if action is None:
+            return
+        allowed = _PERMITTED_ACTIONS.get(msg.trust_level, set())
+        if action not in allowed:
+            raise PermissionError(
+                f"{msg.trust_level.name}-level message from '{msg.sender_id}' "
+                f"requested action '{action}', which is outside the permitted "
+                f"action set {sorted(allowed)} for that trust level. Rejected."
+            )
 
     def _sanitise_external(self, msg: AgentMessage) -> AgentMessage:
         clean = self.DANGEROUS_CHARS.sub("", msg.content)
@@ -630,14 +656,18 @@ class ApprovalRequest:
     A well-designed approval request surfaces four things a reviewer needs
     to make an informed decision (section 7.8.1): the agent's stated goal,
     the specific action in plain English, the predicted outcome, and the
-    fallback plan if the request is denied.
+    fallback plan if the request is denied. Those four fields, plus the
+    tool name and parameters that back the plain-English description, are
+    required constructor arguments: a request that omits any of them
+    fails at construction time rather than reaching a reviewer with a
+    blank field, which is the whole point of designing the schema this way.
     """
-    agent_goal: str = ""
-    tool_name: str = ""
-    tool_params: Dict[str, Any] = field(default_factory=dict)
-    plain_english_action: str = ""
-    predicted_outcome: str = ""
-    fallback_plan: str = ""
+    agent_goal: str
+    tool_name: str
+    tool_params: Dict[str, Any]
+    plain_english_action: str
+    predicted_outcome: str
+    fallback_plan: str
     session_id: str = ""
     agent_id: str = ""
     request_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -785,6 +815,59 @@ class TestTrustLevelOrdering:
     def test_downgrade_at_boundary_always_yields_external(self) -> None:
         for level in TrustLevel:
             assert level.downgrade_trust_at_boundary() == TrustLevel.EXTERNAL
+
+
+class TestPermittedActionsEnforcement:
+    """Exercises _PERMITTED_ACTIONS enforcement wired into TrustLevelWrapper.ingest()."""
+
+    def test_external_message_with_permitted_read_action_passes(self) -> None:
+        wrapper = TrustLevelWrapper(system_secret="s")
+        msg = AgentMessage(
+            sender_id="retriever-1",
+            trust_level=TrustLevel.EXTERNAL,
+            content="Retrieved document text.",
+            metadata={"action": "read"},
+        )
+        result = wrapper.ingest(msg)
+        assert result.content == "Retrieved document text."
+
+    def test_external_message_with_write_action_rejected(self) -> None:
+        wrapper = TrustLevelWrapper(system_secret="s")
+        msg = AgentMessage(
+            sender_id="retriever-1",
+            trust_level=TrustLevel.EXTERNAL,
+            content="Please write this to the database.",
+            metadata={"action": "write"},
+        )
+        try:
+            wrapper.ingest(msg)
+            assert False, "Expected PermissionError"
+        except PermissionError:
+            pass
+
+    def test_agent_message_with_outbound_action_rejected(self) -> None:
+        wrapper = TrustLevelWrapper(system_secret="s")
+        msg = AgentMessage(
+            sender_id="worker-agent-2",
+            trust_level=TrustLevel.AGENT,
+            content="Sending notification.",
+            metadata={"action": "outbound"},
+        )
+        try:
+            wrapper.ingest(msg)
+            assert False, "Expected PermissionError"
+        except PermissionError:
+            pass
+
+    def test_message_without_declared_action_skips_check(self) -> None:
+        wrapper = TrustLevelWrapper(system_secret="s")
+        msg = AgentMessage(
+            sender_id="worker-agent-2",
+            trust_level=TrustLevel.AGENT,
+            content="Status update, no action requested.",
+        )
+        result = wrapper.ingest(msg)
+        assert result.content == "Status update, no action requested."
 
 
 class TestScopedCredentials:
@@ -1882,14 +1965,9 @@ class AgentTripwireDetector:
 
 # ---------------------------------------------------------------------------
 # Listing 7.11: CUSUMActionRateMonitor: CUSUM for agentic action rate monitoring
-# Requirements: collections (stdlib); numpy optional (uses pure-Python fallback)
+# Requirements: collections (stdlib). Pure-Python arithmetic only: no numpy
+# dependency for this class.
 # ---------------------------------------------------------------------------
-
-try:
-    import numpy as _np_cusum
-    _NUMPY_AVAILABLE = True
-except ImportError:
-    _NUMPY_AVAILABLE = False
 
 
 class CUSUMActionRateMonitor:

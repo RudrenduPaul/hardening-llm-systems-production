@@ -14,7 +14,8 @@ Covers (listing numbers match the chapter text):
   8.5a  scan_o3_response — dual-output PII scanner (OpenAI responses API)
   8.5b  CoTFilter — chain-of-thought leakage filter
   8.6   execute_right_to_erasure — user-scoped Pinecone deletion
-  8.6a  pgvector_erasure / weaviate_erasure — erasure for pgvector and Weaviate
+  8.6a  pgvector_erasure — erasure for pgvector
+  8.6a-2 weaviate_erasure — erasure for Weaviate
   8.6b  ErasureLedger — two-phase erasure protocol
   8.7   PIIGateConfig / run_pii_gate — PII + memorization CI/CD gate
 

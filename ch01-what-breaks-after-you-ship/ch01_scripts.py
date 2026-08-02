@@ -10,7 +10,7 @@ LLM-powered system to get a 0-25 exposure score and a prioritized remediation pl
 incidents occur in production.
 
 Requirements:
-    python>=3.11
+    python>=3.9
     dataclasses (stdlib)
     json (stdlib)
     argparse (stdlib)
@@ -509,7 +509,7 @@ def demo_report(scenario: str = "mixed") -> HardeningReport:
         report.answer_all_no()
         return report
 
-    # Mixed scenario: a realistic early-production LLM system. Total = 12/25,
+    # Mixed scenario: a realistic early-production LLM system. Total = 11/25,
     # which lands in the "Partial hardening" tier (11-18, section 1.7.3).
     mixed_answers: dict[str, bool] = {
         # Hallucination containment: CI check, RAG grounding, and threshold

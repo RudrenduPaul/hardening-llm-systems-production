@@ -1,12 +1,12 @@
 > **Living document**: This file is updated as libraries and regulations evolve. Last updated: 2026-05-31.
 
-> **All versions pinned for reproducibility.** Install with `pip install -r requirements.txt` from the companion-code root. The CI workflow at `.github/workflows/test-notebooks.yml` validates these versions weekly on Python 3.10 and 3.11.
+> **All versions pinned for reproducibility.** Install with `pip install -r requirements.txt` from the repository root. The CI workflow at `.github/workflows/test-notebooks.yml` validates these versions weekly on Python 3.10 and 3.11.
 
 # Appendix C: Python Tooling Reference: Minimal Working Examples with Pinned Versions
 
 This appendix is a practical reference for the full toolchain used in this book. Each entry provides: package version, installation command, a minimal working Python example, and a cross-reference to the chapter that covers it in depth. All examples are syntactically correct and runnable after installing the pinned version.
 
-Run `pip install -r requirements.txt` from the companion-code repository root to install the complete toolchain at once.
+Run `pip install -r requirements.txt` from the repository root to install the complete toolchain at once.
 
 ---
 
@@ -259,7 +259,7 @@ anonymized = anonymizer.anonymize(
 )
 print(anonymized.text)
 # Output: "<REDACTED>'s SSN is <REDACTED> and email is <REDACTED>"
-# Chapter 9 (PII detection), Chapter 11 (runtime Presidio integration)
+# Chapter 8 (PII detection), Chapter 11 (runtime Presidio integration)
 ```
 
 ### C.4.2 LLM Guard
@@ -383,7 +383,7 @@ session = px.launch_app()
 from phoenix.otel import register
 tracer_provider = register(project_name="hardening-book")
 tracer = trace.get_tracer("hardening.stack")
-# Chapter 11 (observability layer), Chapter 8 (agent telemetry)
+# Chapter 11 (observability layer), Chapter 7 (agent telemetry)
 ```
 
 ### C.6.2 Langfuse
@@ -409,7 +409,7 @@ def run_pipeline(user_input: str) -> str:
     return output
 
 result = run_pipeline("What is hallucination?")
-# Chapter 8 (agent session tracing), Chapter 11 (observability layer)
+# Chapter 7 (agent session tracing), Chapter 11 (observability layer)
 ```
 
 ---
@@ -573,65 +573,127 @@ Use this checklist when deploying or integrating a Model Context Protocol (MCP) 
 
 ## C.11 Complete requirements.txt for the companion repository
 
+This is a verbatim copy of `requirements.txt` at the repository root. It stays in sync with the real file automatically: the weekly CI freshness workflow (`.github/workflows/test-notebooks.yml`) diffs this block against `requirements.txt` and fails the build if they drift.
+
 ```
-# Core orchestration
+# ============================================================
+# Hardening LLM Systems in Production — Companion Code
+# Manning Books | Authors: Rudrendu Paul, Sourav Nandy
+#
+# Versioning: exact pins (==) for fast-breaking APIs; floor+ceiling (>=X,<X+1) for stable libs
+# Python: >=3.10, <3.13
+# Tested on: Python 3.10, 3.11
+# Last verified: 2026-05-31
+#
+# Install: pip install -r requirements.txt
+# Spacy model: python -m spacy download en_core_web_lg
+# ============================================================
+
+# Chapter cross-reference:
+# Ch1:  requests, pydantic
+# Ch2:  deepeval, ragas, datasets, scipy, scikit-learn, openai
+# Ch3:  deepeval, ragas, langchain, openai
+# Ch4:  llm-guard, pydantic, openai, pytest (sentence-transformers/scikit-learn/numpy for the
+#       illustrative embedding-detection comparison in section 4.5 only, not the companion script)
+# Ch5:  pinecone-client, langchain, sentence-transformers, scipy, numpy, pytest
+# Ch6:  garak, pyrit, ragas, sentence-transformers, pytest
+# Ch7:  langfuse, opentelemetry-sdk, langchain, langchain-openai, langgraph, sentence-transformers
+# Ch8:  presidio-analyzer, presidio-anonymizer, spacy, textblob, anthropic
+# Ch9:  nemoguardrails, guardrails-ai, scikit-learn, openai
+# Ch10: pyyaml, fastapi, uvicorn, opentelemetry-sdk
+# Ch11: litellm, arize-phoenix, langfuse, langchain, langchain-openai, langgraph,
+#       llama-index, deepeval, presidio-analyzer, presidio-anonymizer, opentelemetry-sdk
+
+# ============================================================
+# LLM Frameworks
+# ============================================================
 langchain==0.3.0
 langchain-openai==0.2.0
 langgraph==0.2.0
 llama-index==0.11.0
 haystack-ai==2.3.0
+
+# ============================================================
+# LLM Provider SDKs
+# ============================================================
 openai>=1.35.0,<2.0
 anthropic>=0.29.0,<1.0
 
-# Vector stores
+# ============================================================
+# Vector Stores
+# ============================================================
 pinecone-client==4.1.0
 weaviate-client==4.5.0
 qdrant-client==1.9.0
 psycopg2-binary>=2.9.9,<3.0
 pgvector>=0.3.0,<1.0
 
-# Guardrails
+# ============================================================
+# Guardrails & Safety
+# ============================================================
 guardrails-ai==0.5.0
 nemoguardrails==0.9.0
 llm-guard==0.3.12
-
-# PII and content safety
 presidio-analyzer==2.2.354
 presidio-anonymizer==2.2.354
-# spacy model: python -m spacy download en_core_web_lg
+spacy==3.7.4
 
-# Red-teaming (install separately in CI)
+# ============================================================
+# Red-Teaming & Evaluation
+# ============================================================
 garak==0.10.0
 pyrit==0.6.0
-
-# Evaluation
 deepeval==0.21.7
 ragas==0.1.21
 datasets>=2.20.0,<3.0
 
+# ============================================================
 # Observability
+# ============================================================
 arize-phoenix==4.5.0
 langfuse==2.28.0
 opentelemetry-sdk==1.21.0
 opentelemetry-exporter-otlp==1.21.0
 
-# LLM gateway
+# ============================================================
+# LLM Gateway / Routing
+# ============================================================
 litellm==1.35.0
 portkey-ai==1.3.0
 
-# Statistical utilities
+# ============================================================
+# Scientific Computing & NLP
+# ============================================================
 scipy>=1.13.0,<2.0
 scikit-learn>=1.5.0,<2.0
 numpy>=1.26.4,<2.0
-textblob>=0.17.0,<1.0
+textblob>=0.18.0,<1.0
 sentence-transformers==2.6.0
+matplotlib>=3.9.0,<4.0
+tiktoken==0.7.0
 
-# Utility
+# ============================================================
+# Web / API
+# ============================================================
 pydantic>=2.7.0,<3.0
-fastapi>=0.110.0,<1.0
-uvicorn>=0.27.0,<1.0
-pyyaml>=6.0,<7.0
-jinja2>=3.1.0,<4.0
+fastapi>=0.111.0,<1.0
+uvicorn>=0.30.0,<1.0
+requests>=2.32.0,<3.0
+httpx>=0.27.0,<1.0
+
+# ============================================================
+# Utilities
+# ============================================================
+pyyaml>=6.0.1,<7.0
+jinja2>=3.1.4,<4.0
+python-dotenv==1.0.1
+tenacity==8.3.0
+
+# ============================================================
+# Testing
+# ============================================================
+pytest==8.2.0
+pytest-asyncio==0.23.6
 ```
 
 ---

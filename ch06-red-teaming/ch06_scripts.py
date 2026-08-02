@@ -293,6 +293,13 @@ def run_pyrit_pair_attack(
 # Listing 6.4: Promptfoo red-team configuration
 # ---------------------------------------------------------------------------
 
+# This generator is a distinct, simpler helper from the worked example shown
+# in the book as Listing 6.4 (companion-code/ch06-red-teaming/promptfoo-redteam.yaml):
+# it uses a generic "input" variable and a different, broader plugin/strategy
+# set (pii:direct, politics, excessive-agency, jailbreak:tree, numTests) meant
+# for programmatic CI use, not the customer-support worked example the
+# chapter walks through. Point run_promptfoo() at promptfoo-redteam.yaml
+# directly to reproduce Listing 6.4 exactly.
 PROMPTFOO_CONFIG_TEMPLATE = """\
 # Promptfoo red-team configuration
 # Chapter 6: Hardening LLM Systems in Production
@@ -354,10 +361,19 @@ def generate_promptfoo_config(
 
 def run_promptfoo(config_path: str, timeout: int = 300) -> dict[str, Any]:
     """
-    Execute a promptfoo evaluation and parse the JSON results.
+    Execute a promptfoo red-team scan and parse the JSON results.
+
+    Uses `promptfoo redteam run`, not `promptfoo eval`: `eval` only runs the
+    static `tests:` block already present in the config, so it never
+    generates or exercises the adversarial prompts described under the
+    config's `redteam:` plugins/strategies section. `redteam run` does both:
+    it generates the adversarial test cases from the plugins/strategies and
+    then evaluates them, which is what actually exercises the red-team
+    coverage this chapter teaches.
+
     Requires: npm install -g promptfoo
     """
-    cmd = ["promptfoo", "eval", "--config", config_path, "--output", "json"]
+    cmd = ["promptfoo", "redteam", "run", "--config", config_path, "--output", "json"]
     print(f"[Promptfoo] Running: {' '.join(cmd)}")
 
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -797,7 +813,7 @@ class AttackTag:
 class TaggedTestCase:
     """A single red-team test case with a three-dimensional attack tag."""
     name: str
-    prompt_or_sequence: Any  # str for one_shot; list[str] for multi_turn / context_window_spanning
+    prompt_or_sequence: str | list[str]  # str for one_shot; list[str] for multi_turn / context_window_spanning
     tag: AttackTag
     notes: str = ""
 

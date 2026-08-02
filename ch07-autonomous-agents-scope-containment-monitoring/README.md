@@ -6,7 +6,7 @@ Build the containment layer for autonomous LLM agents — enforcing MCP tool all
 
 | File | Description |
 |------|-------------|
-| [`ch07_notebook.ipynb`](ch07_notebook.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch07-autonomous-agents-scope-containment-monitoring/ch07_notebook.ipynb) | Interactive notebook: test each containment component with synthetic tool definitions and messages |
+| [`ch07_notebook.ipynb`](ch07_notebook.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch07-autonomous-agents-scope-containment-monitoring/ch07_notebook.ipynb) | Interactive notebook: test every containment and monitoring component (sections 1-8: allowlisting, trust levels, credentials, sandboxing, approvals; sections 9-15: telemetry, tripwires, CUSUM, memory-drift detection, complexity scoring, CI gate) with synthetic tool definitions and messages |
 | [`ch07_scripts.py`](ch07_scripts.py) | `MCPToolAllowlistEnforcer`, `TrustLevelWrapper`, `ScopedCredentialManager`, `SandboxedSubprocessExecutor` |
 
 ## What this chapter builds

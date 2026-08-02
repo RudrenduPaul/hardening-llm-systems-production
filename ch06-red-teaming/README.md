@@ -8,6 +8,7 @@ Build an automated red-team pipeline combining Garak (probe-based scanning), PyR
 |------|-------------|
 | [`ch06_notebook.ipynb`](ch06_notebook.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/ch06-red-teaming/ch06_notebook.ipynb) | Interactive notebook: parse scan results, build scoring heatmap, generate CI test file |
 | [`ch06_scripts.py`](ch06_scripts.py) | `run_garak_scan`/`parse_garak_report`, `run_pyrit_pair_attack`, `generate_promptfoo_config`/`run_promptfoo`, `RedTeamOrchestrator`, `LLMRedTeamScoringFramework`, `ci_red_team_gate` |
+| [`promptfoo-redteam.yaml`](promptfoo-redteam.yaml) | The worked-example config from Listing 6.4 (customer-support red team: `indirect-prompt-injection`, `harmful:hate`, `harmful:violent-crime`, `jailbreak` strategy); run with `promptfoo redteam run --config promptfoo-redteam.yaml` |
 
 ## What this chapter builds
 
