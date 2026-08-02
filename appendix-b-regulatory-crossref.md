@@ -1,4 +1,4 @@
-> **Living document**: This file is updated as libraries and regulations evolve. Last updated: 2026-05-31.
+> **Living document**: This file is updated as libraries and regulations evolve. Last updated: 2026-08-01.
 
 # Appendix B: Regulatory Cross-Reference: EU AI Act, NIST AI 600-1, NIST AI 100-2, and ISO/IEC 42001
 
@@ -27,7 +27,7 @@ The cross-reference tables below show which framework elements share the same en
 Before producing Annex IV documentation, determine whether your system qualifies as high-risk under Annex III ([EU AI Act Annex III](https://artificialintelligenceact.eu/annex/3/)). High-risk obligations (conformity assessment, Annex IV documentation, post-market monitoring) apply only to high-risk systems.
 
 **Step 1: Is your system a GPAI model?**
-General-purpose AI models (foundation models) have separate obligations under EU AI Act Title III Chapter II. If yes, the GPAI obligations apply regardless of Annex III classification.
+General-purpose AI models (foundation models) have separate obligations under EU AI Act Chapter V (Articles 51-56). If yes, the GPAI obligations apply regardless of Annex III classification.
 
 **Step 2: Does your system fall into an Annex III category?**
 
@@ -64,7 +64,7 @@ The following checklist maps each Annex IV requirement to the engineering artifa
 | 2.3 Development methodologies | MLOps documentation, evaluation methodology | Ch 10 | |
 | 3.1 Monitoring and control measures | Observability dashboard config, alert thresholds | Ch 10, 11 | |
 | 3.2 Human oversight mechanisms | Human-in-the-loop documentation (for agents: approval queue config) | Ch 7, 10 | |
-| 3.3 Input data specifications | Input validation schema, PII handling policy | Ch 9 | |
+| 3.3 Input data specifications | Input validation schema, PII handling policy | Ch 8 | |
 | 4.1 Risk management documentation | Risk assessment, red-team report, bias assessment | Ch 6, 9, 10 | |
 | 4.2 Robustness and cybersecurity measures | Injection defense architecture, adversarial test results | Ch 4, 6 | |
 | 5.1 Lifecycle change documentation | Change log with dates, versions, approvals | Ch 10 | |
