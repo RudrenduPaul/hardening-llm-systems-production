@@ -7,16 +7,23 @@ Companion script for Manning publication by Rudrendu Paul.
 Covers (listing numbers match the chapter text):
   8.1   Presidio Analyzer pipeline with a custom PATIENT_ID recognizer
   8.2   Presidio Anonymizer with configurable operators per entity type
-  8.2a  QuasiIdentifierTracker — session-level combination scoring
   8.3   PIIGuardedLLMPipeline — input redaction + output scanning
+  8.3a  QuasiIdentifierTracker — session-level combination scoring
   8.4   memorization_probe — Carlini-style extraction probe (difflib, greedy decoding)
   8.5   scan_reasoning_model_output — dual-output PII scanner (Claude extended thinking)
-  8.5a  CoTFilter — chain-of-thought leakage filter
-  8.5b  scan_o3_response — dual-output PII scanner (OpenAI responses API)
+  8.5a  scan_o3_response — dual-output PII scanner (OpenAI responses API)
+  8.5b  CoTFilter — chain-of-thought leakage filter
   8.6   execute_right_to_erasure — user-scoped Pinecone deletion
-  8.6a  ErasureLedger — two-phase erasure protocol
-  8.6b  pgvector_erasure / weaviate_erasure — erasure for pgvector and Weaviate
+  8.6a  pgvector_erasure / weaviate_erasure — erasure for pgvector and Weaviate
+  8.6b  ErasureLedger — two-phase erasure protocol
   8.7   PIIGateConfig / run_pii_gate — PII + memorization CI/CD gate
+
+  NOTE: listing numbers were renumbered chapter-wide so that sub-lettered
+  listings (8.3a, 8.5a/8.5b, 8.6a/8.6b) are assigned in the order they
+  actually appear in the chapter text (see the chapter's own changelog).
+  This file's section order below does not match that document order —
+  it groups code by topic, not by reading order — so don't assume the
+  physical order of functions in this file mirrors the listing sequence.
 
 NOTE ON SCOPE: this file previously carried the pre-split ch08/ch09 merged
 script, including a counterfactual bias probe, an occupational-association
@@ -166,7 +173,7 @@ def anonymize_text(text: str, analyzer_results: list, anonymizer: Any) -> str:
 
 
 # ===========================================================================
-# Listing 8.2a — QuasiIdentifierTracker: session-level combination scoring
+# Listing 8.3a — QuasiIdentifierTracker: session-level combination scoring
 # ===========================================================================
 
 QUASI_IDENTIFIER_TYPES = {
@@ -421,7 +428,7 @@ def scan_reasoning_model_output(
 
 
 # ===========================================================================
-# Listing 8.5a — CoTFilter: chain-of-thought leakage filter
+# Listing 8.5b — CoTFilter: chain-of-thought leakage filter
 # ===========================================================================
 
 @dataclass
@@ -500,7 +507,7 @@ class CoTFilter:
 
 
 # ===========================================================================
-# Listing 8.5b — Scanning OpenAI o3 reasoning_content via the responses API
+# Listing 8.5a — Scanning OpenAI o3 reasoning_content via the responses API
 # ===========================================================================
 
 @dataclass
@@ -640,7 +647,7 @@ def execute_right_to_erasure(
 
 
 # ===========================================================================
-# Listing 8.6a — ErasureLedger: two-phase erasure protocol for vector stores
+# Listing 8.6b — ErasureLedger: two-phase erasure protocol for vector stores
 # ===========================================================================
 
 @dataclass
@@ -743,7 +750,7 @@ class ErasureLedger:
 
 
 # ===========================================================================
-# Listing 8.6b — Right-to-erasure for pgvector (PostgreSQL) and Weaviate
+# Listing 8.6a — Right-to-erasure for pgvector (PostgreSQL) and Weaviate
 # ===========================================================================
 
 try:

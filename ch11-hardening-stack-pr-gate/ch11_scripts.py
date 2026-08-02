@@ -1222,9 +1222,9 @@ class PRHardeningGate:
     Each check delegates its verdict to the CI harness the corresponding
     chapter already built (deepeval + RAGAS from ch02/ch03, EmbeddingAnomalyDetector
     and TenantScopedPineconeClient from ch05, Garak/PyRIT and RedTeamOrchestrator
-    from ch04/ch06, AgentTripwireDetector and MCPToolAllowlistEnforcer from ch07,
-    PIIGuardedPipeline and ErasureLedger from ch08, HarmfulContentCIGate from ch09,
-    AnnexIVPackage from ch10). This gate does not re-run those evaluations; it
+    from ch06, AgentTripwireDetector and MCPToolAllowlistEnforcer
+    from ch07, PIIGuardedPipeline and ErasureLedger from ch08, HarmfulContentCIGate
+    from ch09, AnnexIVPackage from ch10). This gate does not re-run those evaluations; it
     aggregates their pre-computed report dicts into one pass/fail signal and
     blocks the merge if any of them failed.
 
@@ -1466,15 +1466,21 @@ class PRHardeningGate:
                 details="No RAG tenant-isolation / anomaly report provided",
             )
         r = self.rag_security_report
-        isolation_passed = bool(r.get("tenant_isolation_passed", False))
-        cross_tenant_leak = bool(r.get("cross_tenant_leak_detected", False))
-        anomaly_detected = bool(r.get("anomaly_detected", False))
-        anomaly_score = r.get("anomaly_score")
-        passed = isolation_passed and not cross_tenant_leak and not anomaly_detected
+        # Real TenantScopedPineconeClient.query() (ch05_scripts.py) returns a
+        # TenantQueryResult with `filtered_count` -- the number of cross-tenant
+        # matches its post-filter stripped before they reached the caller --
+        # not a `tenant_isolation_passed` / `cross_tenant_leak_detected` pair.
+        # Real EmbeddingAnomalyDetector.detect() (ch05_scripts.py) returns an
+        # AnomalyDetectionResult with `is_anomaly` / `score`, not
+        # `anomaly_detected` / `anomaly_score`.
+        filtered_count = int(r.get("filtered_count", 0))
+        cross_tenant_leak = filtered_count > 0
+        is_anomaly = bool(r.get("is_anomaly", False))
+        anomaly_score = r.get("score")
+        passed = not cross_tenant_leak and not is_anomaly
         detail = (
-            f"Tenant isolation {'passed' if isolation_passed else 'FAILED'}"
-            f" | cross-tenant leak: {cross_tenant_leak}"
-            f" | retrieval anomaly detected: {anomaly_detected}"
+            f"Cross-tenant matches stripped by post-filter: {filtered_count}"
+            f" | retrieval anomaly detected: {is_anomaly}"
         )
         if anomaly_score is not None:
             detail += f" (score {anomaly_score:.3f})"
@@ -1495,17 +1501,27 @@ class PRHardeningGate:
                 details="No agent scope-containment report provided",
             )
         r = self.agent_scope_report
-        violations = r.get("allowlist_violations", [])
-        tripwire_triggered = bool(r.get("tripwire_triggered", False))
-        passed = not violations and not tripwire_triggered
+        # Real AgentTripwireDetector (ch07_scripts.py) exposes `.events`, a
+        # list of TripwireEvent(rule_name, severity, context, timestamp)
+        # records -- there is no `allowlist_violations` list or
+        # `tripwire_triggered` boolean. Severity "P0" (UNAUTHORIZED_TOOL) is
+        # an immediate scope violation and blocks the merge outright; "P1"
+        # (EXCESSIVE_READ) and "P2" (WRITE_WITHOUT_READ) are the detector's
+        # own flag-for-review tiers, not hard blocks, so they're surfaced in
+        # the detail message but don't fail this check on their own.
+        events = r.get("events", [])
+        p0_events = [e for e in events if e.get("severity") == "P0"]
+        tripwire_triggered = len(events) > 0
+        passed = not p0_events
         return PRGateResult(
             check_name="agent_scope_containment",
             passed=passed,
             details=(
-                f"{len(violations)} allowlist violation(s) | "
+                f"{len(events)} tripwire event(s), {len(p0_events)} P0 "
+                f"(unauthorized-tool) scope violation(s) | "
                 f"tripwire triggered: {tripwire_triggered}"
             ),
-            score=float(len(violations)),
+            score=float(len(p0_events)),
         )
 
     # -- Check 8: PII detection gate (Ch 8) — runs 7th --
@@ -1520,20 +1536,27 @@ class PRHardeningGate:
             )
         r = self.pii_report
         miss_rate = r.get("detection_miss_rate", 1.0)
-        erasure_verified = bool(r.get("erasure_verified", False))
-        erasure_failures = r.get("erasure_failures", [])
-        passed = (
-            miss_rate <= self.pii_max_miss_rate
-            and erasure_verified
-            and not erasure_failures
-        )
+        # Real ErasureLedger.execute_erasure() (ch08_scripts.py) returns an
+        # ErasureReport with `vector_store_confirmed` (plus an optional
+        # `error`), not an `erasure_verified` boolean. A CI harness re-running
+        # erasure verification for every request filed since the last release
+        # would pass one ErasureReport dict per request under
+        # `erasure_reports`; a request is a failure when its
+        # `vector_store_confirmed` is False or it carries a non-null `error`.
+        erasure_reports = r.get("erasure_reports", [])
+        erasure_failures = [
+            er for er in erasure_reports
+            if not er.get("vector_store_confirmed", False) or er.get("error")
+        ]
+        erasure_verified = not erasure_failures
+        passed = miss_rate <= self.pii_max_miss_rate and erasure_verified
         return PRGateResult(
             check_name="pii_detection",
             passed=passed,
             details=(
                 f"Detection miss rate {miss_rate:.4f} (max {self.pii_max_miss_rate}) | "
                 f"right-to-erasure verified: {erasure_verified} "
-                f"({len(erasure_failures)} failure(s))"
+                f"({len(erasure_failures)} failure(s) of {len(erasure_reports)})"
             ),
             score=miss_rate,
         )
@@ -1547,22 +1570,35 @@ class PRHardeningGate:
                 details="No content-safety / bias report provided",
             )
         r = self.content_safety_report
-        toxicity_rate = r.get("toxicity_rate", 1.0)
-        bias_gap = r.get("bias_gap", 0.0)
-        bias_gap_baseline = r.get("bias_gap_baseline", bias_gap)
-        bias_gap_widened = bool(
-            r.get("bias_gap_widened", bias_gap > bias_gap_baseline)
+        # Real HarmfulContentCIGate.run() (ch09_scripts.py) returns a
+        # GateReport with `harmful_fraction` / `harmful_fraction_passed`
+        # (not a `toxicity_rate` scalar) and `bias_failures`, a list of
+        # per-attribute / per-occupation failure dicts plus a `bias_passed`
+        # flag (not a single `bias_gap` / `bias_gap_baseline` /
+        # `bias_gap_widened` triple). The gate already computed both
+        # pass/fail verdicts, so read them directly instead of re-deriving
+        # a threshold comparison from fields that don't exist.
+        harmful_fraction = r.get("harmful_fraction", 1.0)
+        harmful_fraction_passed = bool(
+            r.get(
+                "harmful_fraction_passed",
+                harmful_fraction <= self.content_safety_max_toxicity_rate,
+            )
         )
-        passed = toxicity_rate <= self.content_safety_max_toxicity_rate and not bias_gap_widened
+        bias_failures = r.get("bias_failures", [])
+        bias_passed = bool(r.get("bias_passed", not bias_failures))
+        passed = harmful_fraction_passed and bias_passed
         return PRGateResult(
             check_name="content_safety_bias",
             passed=passed,
             details=(
-                f"Toxicity rate {toxicity_rate:.4f} (max {self.content_safety_max_toxicity_rate}) | "
-                f"protected-class gap {bias_gap:.4f} vs baseline {bias_gap_baseline:.4f} "
-                f"(widened: {bias_gap_widened})"
+                f"Harmful-output fraction {harmful_fraction:.4f} "
+                f"(max {self.content_safety_max_toxicity_rate}, "
+                f"{'passed' if harmful_fraction_passed else 'FAILED'}) | "
+                f"bias gate {'passed' if bias_passed else 'FAILED'} "
+                f"({len(bias_failures)} bias failure(s))"
             ),
-            score=toxicity_rate,
+            score=harmful_fraction,
         )
 
     # -- Check 4: Prompt injection and adversarial scan (Ch 4, Ch 6) — runs 9th --
@@ -1574,20 +1610,27 @@ class PRHardeningGate:
                 details="No Garak/PyRIT adversarial-scan report provided",
             )
         r = self.adversarial_scan_report
+        # `fail_rate` matches ch06_scripts.py's real code: it's the natural
+        # aggregate you'd compute from GarakScanReport.total_failures /
+        # total_probes (each individual GarakFinding also carries its own
+        # fail_rate). `new_vulnerability_classes` has no equivalent in
+        # either ch04's or ch06's real detectors -- there is no concept of
+        # a "vulnerability class" tracked release-over-release in either
+        # chapter's code -- so that half of the check is dropped rather
+        # than reading a field that never existed.
         fail_rate = r.get("fail_rate", 1.0)
-        new_vuln_classes = r.get("new_vulnerability_classes", [])
         error = r.get("error")
-        passed = fail_rate <= self.adversarial_max_fail_rate and not new_vuln_classes
+        passed = fail_rate <= self.adversarial_max_fail_rate
         if self._is_stub_pass(error):
             passed = True
         return PRGateResult(
             check_name="adversarial_scan",
             passed=passed,
             details=(
-                f"Fail rate {fail_rate} (max {self.adversarial_max_fail_rate}) | "
-                f"new vulnerability classes: {new_vuln_classes or 'none'}"
+                f"Fail rate {fail_rate} (max {self.adversarial_max_fail_rate})"
                 + (f" | error: {error}" if error else "")
             ),
+            score=fail_rate,
         )
 
     # -- Check 6: Red-team scan (Ch 6) — runs 10th --
@@ -1599,17 +1642,26 @@ class PRHardeningGate:
                 details="No red-team scan report provided",
             )
         r = self.red_team_report
-        attack_success_rate = r.get("attack_success_rate", 1.0)
-        baseline = r.get("baseline_attack_success_rate", 0.0)
-        passed = attack_success_rate <= baseline + self.red_team_baseline_tolerance
+        # Real RedTeamOrchestrator.run() (ch06_scripts.py) returns an
+        # OrchestratorReport with `passed_ci_gate` (a bool the orchestrator
+        # already derived from critical_count <= ci_critical_threshold and
+        # high_count <= ci_high_threshold) plus `critical_count` /
+        # `high_count` -- there is no `attack_success_rate` or
+        # `baseline_attack_success_rate` field to compare against a
+        # tolerance. Read the orchestrator's own verdict directly.
+        gate_passed = bool(r.get("passed_ci_gate", False))
+        critical_count = r.get("critical_count", 0)
+        high_count = r.get("high_count", 0)
+        ci_gate_reason = r.get("ci_gate_reason", "")
         return PRGateResult(
             check_name="red_team_scan",
-            passed=passed,
+            passed=gate_passed,
             details=(
-                f"Attack success rate {attack_success_rate:.4f} vs baseline {baseline:.4f} "
-                f"(tolerance {self.red_team_baseline_tolerance})"
+                f"Red-team CI gate {'passed' if gate_passed else 'FAILED'}"
+                + (f": {ci_gate_reason}" if ci_gate_reason else "")
+                + f" ({critical_count} critical, {high_count} high severity finding(s))"
             ),
-            score=attack_success_rate,
+            score=float(critical_count + high_count),
         )
 
     # -- Advisory only: NOT one of the ten checks (section 11.6 guardrails tax) --
@@ -2254,24 +2306,27 @@ if __name__ == "__main__":
             "canary": {"passed": True, "error_rate_delta": -0.002},
         },
         rag_security_report={
-            "tenant_isolation_passed": True,
-            "cross_tenant_leak_detected": False,
-            "anomaly_detected": False,
-            "anomaly_score": 0.4,
+            "filtered_count": 0,
+            "is_anomaly": False,
+            "score": 0.4,
         },
         pii_report={
             "detection_miss_rate": 0.01,
-            "erasure_verified": True,
-            "erasure_failures": [],
+            "erasure_reports": [],
         },
         content_safety_report={
-            "toxicity_rate": 0.005,
-            "bias_gap": 0.03,
-            "bias_gap_baseline": 0.04,
-            "bias_gap_widened": False,
+            "harmful_fraction": 0.005,
+            "harmful_fraction_passed": True,
+            "bias_failures": [],
+            "bias_passed": True,
         },
-        adversarial_scan_report={"fail_rate": 0.02, "new_vulnerability_classes": []},
-        red_team_report={"attack_success_rate": 0.03, "baseline_attack_success_rate": 0.03},
+        adversarial_scan_report={"fail_rate": 0.02},
+        red_team_report={
+            "passed_ci_gate": True,
+            "critical_count": 0,
+            "high_count": 0,
+            "ci_gate_reason": "All findings within acceptable thresholds.",
+        },
         profiler_report=profiler_report,
         latency_sla_ms=3000.0,
         strict=False,  # Raise RuntimeError instead of sys.exit in demo

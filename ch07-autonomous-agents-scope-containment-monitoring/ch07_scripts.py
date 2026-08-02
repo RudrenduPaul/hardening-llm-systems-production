@@ -1,5 +1,5 @@
 """
-Hardening LLM Systems in Production — Chapter 7
+Hardening LLM Systems in Production: Chapter 7
 Autonomous Agents: Scope, Containment, Telemetry, and Anomaly Detection
 
 Companion script for Manning publication by Rudrendu Paul.
@@ -15,11 +15,14 @@ Covers:
   - Agent scope test suite (pytest CI gate)
 
 Pinned dependencies:
-  langgraph==0.2.0
-  langchain-openai==0.2.0
+  sentence-transformers==2.6.0
+  numpy
+  opentelemetry-sdk==1.21.0
+  langfuse==2.28.0
+  pytest>=7.0.0,<9.0
 
 Install:
-  pip install langgraph==0.2.0 langchain-openai==0.2.0 pytest
+  pip install sentence-transformers==2.6.0 numpy opentelemetry-sdk==1.21.0 langfuse==2.28.0 pytest
 """
 
 from __future__ import annotations
@@ -58,7 +61,7 @@ class MCPToolAllowlistEnforcer:
     Each entry stores the tool name and the SHA-256 digest of its canonical
     JSON schema (sorted keys, no whitespace).  Before any tool is dispatched,
     the enforcer recomputes the digest and compares it against the pinned
-    value.  A mismatch halts execution — a changed schema could indicate
+    value.  A mismatch halts execution: a changed schema could indicate
     supply-chain tampering or an unreviewed upgrade.
 
     Usage:
@@ -87,7 +90,7 @@ class MCPToolAllowlistEnforcer:
         self._pins[tool_name] = digest
         if handler:
             self._handlers[tool_name] = handler
-        log.info("Pinned tool '%s' — SHA-256: %s", tool_name, digest[:16] + "…")
+        log.info("Pinned tool '%s': SHA-256: %s", tool_name, digest[:16] + "…")
 
     def verify(self, tool_name: str, live_schema: Dict[str, Any]) -> bool:
         """Return True if the live schema matches the pinned digest."""
@@ -131,7 +134,7 @@ class MCPToolAllowlistEnforcer:
 
 
 # ===========================================================================
-# 2. MCP Tool Description Validator — Injection Regex Detection
+# 2. MCP Tool Description Validator: Injection Regex Detection
 # Listing 7.2: MCP tool description validator with injection pattern detection
 # ===========================================================================
 
@@ -214,12 +217,12 @@ class TrustLevel(IntEnum):
     Hierarchical trust levels for messages flowing between agents and
     across system boundaries. Trust is enforced by ordinal value:
     SYSTEM (3) > AGENT (2) > EXTERNAL (1). Trust levels are assigned at
-    message origin and can only be downgraded — never upgraded — as a
+    message origin and can only be downgraded, never upgraded, as a
     message crosses an external boundary.
 
-    SYSTEM   — orchestrator-level; full access; cannot be spoofed by peers.
-    AGENT    — peer agent output within the same pipeline.
-    EXTERNAL — content that has passed through an untrusted boundary
+    SYSTEM: orchestrator-level; full access; cannot be spoofed by peers.
+    AGENT: peer agent output within the same pipeline.
+    EXTERNAL: content that has passed through an untrusted boundary
                (end-user input, retrieved documents, third-party tool output).
     """
     SYSTEM = 3
@@ -237,7 +240,7 @@ class TrustLevel(IntEnum):
 
         Any message that passes through an external system exits that
         boundary with EXTERNAL trust regardless of its trust level before
-        the boundary — trust can only decrease as messages move outward.
+        the boundary: trust can only decrease as messages move outward.
         """
         return TrustLevel.EXTERNAL
 
@@ -306,7 +309,7 @@ class TrustLevelWrapper:
     def _sanitise_external(self, msg: AgentMessage) -> AgentMessage:
         clean = self.DANGEROUS_CHARS.sub("", msg.content)
         if clean != msg.content:
-            log.info("External message sanitised — removed dangerous chars.")
+            log.info("External message sanitised: removed dangerous chars.")
         return AgentMessage(
             sender_id=msg.sender_id,
             trust_level=msg.trust_level,
@@ -373,8 +376,8 @@ class ScopedCredentialManager:
     DEFAULT_TTL: Dict[str, int] = {
         "read_only":   300,   #  5 min
         "read_write":  120,   #  2 min
-        "admin":        60,   #  1 min — shortest TTL for highest privilege
-        "external_api": 900,  # 15 min — longer for slow external APIs
+        "admin":        60,   #  1 min: shortest TTL for highest privilege
+        "external_api": 900,  # 15 min: longer for slow external APIs
     }
 
     def __init__(self) -> None:
@@ -501,7 +504,7 @@ class ConfirmationGate:
         self._pending[action.action_id] = future
 
         log.warning(
-            "APPROVAL REQUIRED [%s] — %s (timeout=%ss)",
+            "APPROVAL REQUIRED [%s]: %s (timeout=%ss)",
             action.action_id,
             action.description,
             self._timeout,
@@ -657,7 +660,7 @@ class AgentApprovalQueue:
 
     An agent submits an ApprovalRequest; an operator calls resolve() with the
     decision.  If no decision arrives within timeout_s, the request is
-    automatically rejected — fail-closed is the correct default for
+    automatically rejected: fail-closed is the correct default for
     irreversible agent actions.
     """
 
@@ -678,7 +681,7 @@ class AgentApprovalQueue:
         try:
             return await asyncio.wait_for(future, timeout=self._timeout)
         except asyncio.TimeoutError:
-            log.error("Request [%s] timed out — auto-rejected.", request.request_id)
+            log.error("Request [%s] timed out: auto-rejected.", request.request_id)
             return False
         finally:
             self._queue.pop(request.request_id, None)
@@ -725,7 +728,7 @@ def _make_web_search_schema() -> Dict[str, Any]:
 
 
 class TestMCPAllowlistEnforcer:
-    """pytest test class — import and run with pytest."""
+    """pytest test class: import and run with pytest."""
 
     def test_pin_and_verify_clean_schema(self) -> None:
         enforcer = MCPToolAllowlistEnforcer()
@@ -827,7 +830,7 @@ class TestActionCategorizer:
 
 
 # ===========================================================================
-# Main — example usage
+# Main: example usage
 # ===========================================================================
 
 async def _demo_approval_queue() -> None:
@@ -854,7 +857,7 @@ async def _demo_approval_queue() -> None:
 
 
 if __name__ == "__main__":
-    print("=== Chapter 7: Autonomous Agents — Scope Containment ===\n")
+    print("=== Chapter 7: Autonomous Agents: Scope Containment ===\n")
 
     # 1. Allowlist enforcer
     print("--- MCP Allowlist Enforcer ---")
@@ -919,7 +922,7 @@ if __name__ == "__main__":
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
-# Section 7.11 — AgentMemoryValidator
+# Section 7.11: AgentMemoryValidator
 # Listing 7.12: Memory segment validator for long-context agents
 # Dependency: sentence-transformers==2.6.0
 # ---------------------------------------------------------------------------
@@ -989,11 +992,11 @@ class AgentMemoryValidator:
         Add a memory segment and return a drift assessment.
 
         Returns a dict with:
-          drift_score: float — cosine distance from the original goal (0.0 = aligned)
-          similarity: float — cosine similarity (1.0 = identical direction)
-          alert: bool — True when drift_score exceeds the threshold for this source
-          action: str — "continue", "flag_for_review", or "suspend_session"
-          source_weight: float — trust weight applied to this source
+          drift_score: float: cosine distance from the original goal (0.0 = aligned)
+          similarity: float: cosine similarity (1.0 = identical direction)
+          alert: bool: True when drift_score exceeds the threshold for this source
+          action: str: "continue", "flag_for_review", or "suspend_session"
+          source_weight: float: trust weight applied to this source
         """
         embedding = self.model.encode(content, normalize_embeddings=True)
         segment = MemorySegment(
@@ -1010,7 +1013,7 @@ class AgentMemoryValidator:
                 "source_weight": self.SOURCE_WEIGHTS.get(source, 0.8),
             }
 
-        # Cosine similarity — embeddings are L2-normalized, so dot product == cosine sim
+        # Cosine similarity: embeddings are L2-normalized, so dot product == cosine sim
         similarity = float(np.dot(embedding, self.goal_embedding))
         drift_score = 1.0 - similarity
 
@@ -1065,7 +1068,7 @@ class AgentMemoryValidator:
 
 
 # ---------------------------------------------------------------------------
-# Section 7.12 — AgentComplexityScorer
+# Section 7.12: AgentComplexityScorer
 # Listing 7.13: AgentComplexityScorer for cognitive degradation detection
 # No external dependencies beyond Python standard library.
 # Designed to integrate with the same alert pipeline as AgentTripwireDetector
@@ -1264,7 +1267,7 @@ class AgentComplexityScorer:
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
-# Listing 7.0: TrifectaScore — lethal trifecta scorer for agent components
+# Listing 7.0: TrifectaScore: lethal trifecta scorer for agent components
 # Requirements: dataclasses (stdlib)
 # ---------------------------------------------------------------------------
 
@@ -1305,7 +1308,7 @@ def score_component(component: AgentComponent) -> TrifectaScore:
 
     Returns a TrifectaScore with risk level and the unmitigated elements.
     Components that score CRITICAL or HIGH require documented architectural
-    mitigations before the release gate in section 7.9 can pass.
+    mitigations before the release gate in section 7.13 can pass.
     """
     elements_present: List[str] = []
     unmitigated: List[str] = []
@@ -1365,7 +1368,7 @@ def score_architecture(components: List[AgentComponent]) -> List[TrifectaScore]:
 
 
 # ---------------------------------------------------------------------------
-# Supplementary (not a numbered chapter listing): SignedAgentMessage — transport-layer
+# Supplementary (not a numbered chapter listing): SignedAgentMessage: transport-layer
 # trust for A2A communication. Implements the signed-metadata design described in prose
 # in section 7.5.1 (origin agent ID, task context ID, authorization scope). The chapter's
 # printed Listing 7.3 is the TrustLevel / TrustLevelWrapper code above (section 3).
@@ -1383,7 +1386,7 @@ class SignedAgentMessage:
     An inter-agent message with a cryptographic signature over its trust envelope.
 
     The signature covers: origin_agent_id, task_context_id, timestamp, and
-    the authorized_scopes list — the fields that establish the trust envelope.
+    the authorized_scopes list: the fields that establish the trust envelope.
     It does NOT sign the content payload, which must go through content-layer
     injection detection separately.
 
@@ -1451,13 +1454,13 @@ class SignedAgentMessage:
         # 3. HMAC verification (constant-time)
         expected_mac = _hmac.new(secret.encode(), self._signing_payload(), _hashlib.sha256)
         if not _hmac.compare_digest(expected_mac.hexdigest(), self.signature):
-            return False, "HMAC signature mismatch — message may have been tampered with."
+            return False, "HMAC signature mismatch: message may have been tampered with."
 
         return True, "ok"
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.8: trace_agent_step — decorator for tracing LLM calls
+# Listing 7.8: trace_agent_step: decorator for tracing LLM calls
 # Requirements: opentelemetry-sdk==1.21.0
 # ---------------------------------------------------------------------------
 
@@ -1519,7 +1522,7 @@ def trace_agent_step(task_context_id: Optional[str] = None):
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.9: InstrumentedAgent — OpenTelemetry spans for agent planning and tool calls
+# Listing 7.9: InstrumentedAgent: OpenTelemetry spans for agent planning and tool calls
 # Requirements: opentelemetry-sdk==1.21.0, opentelemetry-exporter-otlp==1.21.0
 # ---------------------------------------------------------------------------
 
@@ -1585,7 +1588,7 @@ class InstrumentedAgent:
 
 
 # ---------------------------------------------------------------------------
-# Supplementary (not a numbered chapter listing): TracedAgentSession — Langfuse
+# Supplementary (not a numbered chapter listing): TracedAgentSession: Langfuse
 # session-level tracing. Implements the Langfuse session/trace/span design described
 # in prose in section 7.9.2. The chapter's printed Listing 7.11 is CUSUMActionRateMonitor
 # below.
@@ -1686,7 +1689,7 @@ class TracedAgentSession:
 
 
 # ---------------------------------------------------------------------------
-# Supplementary (not a numbered chapter listing): calibrate_tripwire_threshold —
+# Supplementary (not a numbered chapter listing): calibrate_tripwire_threshold,
 # empirical threshold calibration. Implements the calibration approach described in
 # prose in sections 7.10.1 and 7.10.2. The chapter's printed Listing 7.12 is
 # AgentMemoryValidator above (section 7.11).
@@ -1759,11 +1762,11 @@ class TripwireEvent:
     An event fired by the AgentTripwireDetector when a dangerous pattern is detected.
 
     Severity levels:
-      P0 — immediate scope violation (unauthorized tool call).
+      P0: immediate scope violation (unauthorized tool call).
            Interrupt the agent session now.
-      P1 — data exfiltration pattern (excessive reads without write).
+      P1: data exfiltration pattern (excessive reads without write).
            Flag for human review; pause before next action.
-      P2 — unauthorized modification pattern (write without prior read).
+      P2: unauthorized modification pattern (write without prior read).
            Flag for review; proceed with caution.
     """
     rule_name: str
@@ -1790,7 +1793,7 @@ class AgentTripwireDetector:
         in this session.  Catches unauthorized modification patterns where
         an injection bypasses the normal read-before-write flow.
 
-    Instantiate one detector per session — do not share across concurrent
+    Instantiate one detector per session: do not share across concurrent
     sessions, as the read_count and write_seen structures accumulate per session.
     """
 
@@ -1830,7 +1833,7 @@ class AgentTripwireDetector:
             "type": action_type, "ts": time.time(),
         })
 
-        # Rule 1: Tool not in allowlist — P0 immediate scope violation
+        # Rule 1: Tool not in allowlist: P0 immediate scope violation
         if tool not in self.tool_allowlist:
             event = TripwireEvent(
                 "UNAUTHORIZED_TOOL", "P0",
@@ -1839,7 +1842,7 @@ class AgentTripwireDetector:
             self.events.append(event)
             return event
 
-        # Rule 2: >read_limit reads on same resource without write — P1 exfiltration pattern
+        # Rule 2: >read_limit reads on same resource without write: P1 exfiltration pattern
         if action_type == "read":
             self.read_count[resource] += 1
             if self.read_count[resource] > self.read_limit:
@@ -1854,7 +1857,7 @@ class AgentTripwireDetector:
                 self.events.append(event)
                 return event
 
-        # Rule 3: Write to a resource never read — P2 unauthorized modification pattern
+        # Rule 3: Write to a resource never read: P2 unauthorized modification pattern
         if action_type == "write":
             if resource not in self.write_seen and self.read_count.get(resource, 0) == 0:
                 event = TripwireEvent(
@@ -1878,7 +1881,7 @@ class AgentTripwireDetector:
 
 
 # ---------------------------------------------------------------------------
-# Listing 7.11: CUSUMActionRateMonitor — CUSUM for agentic action rate monitoring
+# Listing 7.11: CUSUMActionRateMonitor: CUSUM for agentic action rate monitoring
 # Requirements: collections (stdlib); numpy optional (uses pure-Python fallback)
 # ---------------------------------------------------------------------------
 
@@ -1920,8 +1923,8 @@ class CUSUMActionRateMonitor:
         Parameters
         ----------
         baseline_rate: expected actions per minute under normal operation.
-        k: allowable slack — typically 0.5 * expected shift to detect.
-        h: decision threshold — alert when cumulative sum exceeds h.
+        k: allowable slack: typically 0.5 * expected shift to detect.
+        h: decision threshold: alert when cumulative sum exceeds h.
         """
         self.baseline_rate = baseline_rate
         self.k = k
@@ -2088,9 +2091,9 @@ def verify_telemetry_instrumentation(agent_session_trace: Dict[str, Any]) -> Tup
     ----------
     agent_session_trace:
         Dict of trace artifacts captured during the session.  Must contain:
-          "planning_spans"   — list of planning-step span dicts
-          "tripwire_events"  — list (may be empty)
-          "cusum_state"      — dict with "baseline_rate" key
+          "planning_spans": list of planning-step span dicts
+          "tripwire_events": list (may be empty)
+          "cusum_state": dict with "baseline_rate" key
 
     Returns
     -------
@@ -2205,12 +2208,3 @@ class TestAgentCIGate:
             # cusum_state deliberately omitted -- telemetry gap.
         }
         assert test_agent_scope_and_telemetry(self._clean_executor, trace) == 1
-
-
-# This is the CI/CD gate function itself (Listing 7.14), not a pytest test case.
-# Its name starts with "test_" because that is the API the chapter teaches
-# (`sys.exit(test_agent_scope_and_telemetry(executor, trace))` in a CI job) --
-# but that name collides with pytest's default collection pattern, which then
-# tries to inject `agent_executor` as a fixture. Opt this function out of
-# collection explicitly rather than renaming the public API the book refers to.
-test_agent_scope_and_telemetry.__test__ = False

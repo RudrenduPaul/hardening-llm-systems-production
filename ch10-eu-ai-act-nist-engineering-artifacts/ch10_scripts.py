@@ -12,10 +12,14 @@ Companion script covering:
   - NIST AI 600-1 triage report generator (Listing 10.4b)
   - NISTAI6001Tracker with ImplementationStatus enum and gap_report() (Listing 10.5)
   - Dual-framework mapping report (EU AI Act + NIST cross-reference) (Listing 10.6)
-  - PostMarketMonitoringReport dataclass (Listing 10.8c)
-  - CI/CD Annex IV completeness gate with version + freshness checks (Listing 10.10)
-  - IncidentEscalation, Article73NotificationPackage, ContainmentRunbook,
-    IncidentCapture, IncidentClassifier (sections 10.7-10.8)
+  - IncidentEscalation — Article 73 SLA escalation pipeline (Listing 10.7)
+  - Article73NotificationPackage — 72h/15-day notification packages (Listing 10.8)
+  - PostMarketMonitoringReport dataclass (Listing 10.9)
+  - ContainmentRunbook — four pre-planned containment steps (Listing 10.10)
+  - IncidentCapture — automated P0/P1 state capture (Listing 10.11)
+  - CI/CD Annex IV completeness gate with version + freshness checks (Listing 10.12)
+  - IncidentClassifier — P0/P1/P2 severity classification (sections 10.7-10.8,
+    described in prose only; not yet assigned a listing number, see README)
 
 Dependencies: pyyaml>=6.0  (all others are stdlib)
 """
@@ -629,14 +633,14 @@ class NISTAI6001Tracker:
 # ---------------------------------------------------------------------------
 
 ANNEX_IV_TO_NIST_MAPPING: Dict[str, List[str]] = {
-    "1_general_description": ["Operational Risk", "Value Chain"],
+    "1_general_description": ["Information Security", "Value Chain"],
     "2_system_elements": ["Information Security", "Value Chain", "Environmental Risk"],
-    "3_monitoring_control": ["Operational Risk", "CBRN Content", "Human-AI Config"],
+    "3_monitoring_control": ["Information Security", "CBRN Content", "Human-AI Config"],
     "4_risk_management": [
         "Confabulation", "Data Privacy", "Harmful Bias",
-        "Data Disclosure", "Information Security", "Obscene Content",
+        "Information Security", "Obscene Content",
     ],
-    "5_lifecycle_changes": ["Operational Risk", "Value Chain"],
+    "5_lifecycle_changes": ["Information Security", "Value Chain"],
     "6_conformity_assessment": ["Information Security", "Human-AI Config"],
 }
 
@@ -695,7 +699,7 @@ def generate_dual_framework_report(
 
 # ---------------------------------------------------------------------------
 # 9. PostMarketMonitoringReport (section 10.7.4)
-# Listing 10.8c
+# Listing 10.9
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -756,7 +760,7 @@ class PostMarketMonitoringReport:
 
 # ---------------------------------------------------------------------------
 # 10. CI/CD Annex IV completeness gate (section 10.9, merge-blocking signal #10)
-# Listing 10.10
+# Listing 10.12
 # ---------------------------------------------------------------------------
 
 def annex_iv_ci_gate(
@@ -874,7 +878,7 @@ if __name__ == "__main__":
         pkg.to_json(package_path)
         check_annex_iv_completeness(str(package_path))
 
-        # --- 3b. Merge-blocking CI/CD gate with version + freshness checks (Listing 10.10) ---
+        # --- 3b. Merge-blocking CI/CD gate with version + freshness checks (Listing 10.12) ---
         print("\n--- Annex IV CI/CD Merge Gate ---")
         annex_iv_ci_gate(str(package_path), current_model_version=pkg.system_version)
 
@@ -949,7 +953,7 @@ if __name__ == "__main__":
         print(f"Overall status: {dual_report['overall_status']}")
         print(f"NIST coverage: {dual_report['nist_coverage']['coverage_percentage']}%")
 
-        # --- 9. PostMarketMonitoringReport (Listing 10.8c) ---
+        # --- 9. PostMarketMonitoringReport (Listing 10.9) ---
         print("\n--- Post-Market Monitoring Report ---")
         pmm = PostMarketMonitoringReport(
             system_name="CustomerCareBot",
@@ -985,7 +989,7 @@ if __name__ == "__main__":
 
 # ---------------------------------------------------------------------------
 # 10.7.1 IncidentEscalation — Article 73 SLA-enforced escalation pipeline
-# Listing 10.8a
+# Listing 10.7
 # ---------------------------------------------------------------------------
 
 class EscalationPhase(str, Enum):
@@ -1128,7 +1132,7 @@ class IncidentEscalation:
 
 # ---------------------------------------------------------------------------
 # 10.7.3 Article73NotificationPackage — 72h and 15-day notification packages
-# Listing 10.8b
+# Listing 10.8
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -1203,7 +1207,7 @@ class Article73NotificationPackage:
 
 # ---------------------------------------------------------------------------
 # 10.8.1 ContainmentRunbook — four pre-planned containment steps
-# Listing 10.7a
+# Listing 10.10
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -1282,7 +1286,7 @@ class ContainmentRunbook:
 
 # ---------------------------------------------------------------------------
 # 10.8.4 IncidentCapture — automated P0/P1 state capture
-# Listing 10.7b
+# Listing 10.11
 # ---------------------------------------------------------------------------
 
 class IncidentCapture:

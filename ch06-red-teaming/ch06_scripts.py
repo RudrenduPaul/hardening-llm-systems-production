@@ -5,7 +5,7 @@ Author: Rudrendu Paul | https://orcid.org/0009-0008-0141-4690
 Requirements:
     garak==0.10.0
     pyrit==0.6.0
-    openai>=1.30.0,<2.0
+    openai>=1.35.0,<2.0
     pydantic>=2.0,<3.0
     pyyaml>=6.0,<7.0
     pytest>=7.4.0
@@ -13,6 +13,7 @@ Requirements:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
@@ -68,16 +69,15 @@ def run_garak_scan(
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     report_path = f"{output_dir}/garak_{scan_id}.report.jsonl"
 
-    probe_args = []
-    for p in probes:
-        probe_args += ["--probes", p]
-
+    # garak==0.10.0's --probes argument is type=str (comma-separated), not
+    # action="append" — passing --probes twice on the command line means
+    # argparse keeps only the last value and silently drops the rest.
     cmd = [
         sys.executable, "-m", "garak",
         "--model_type", model_type,
         "--model_name", model_name,
         "--report_prefix", f"{output_dir}/garak_{scan_id}",
-        *probe_args,
+        "--probes", ",".join(probes),
     ]
 
     print(f"[Garak] Running scan {scan_id}: {' '.join(cmd)}")
@@ -174,55 +174,117 @@ class PAIRResult:
     final_response: str
 
 
-def run_pyrit_pair_attack(
-    target_url: str,
+async def _run_pyrit_pair_attack_async(
     objective: str,
-    max_iterations: int = 20,
-    attacker_model: str = "gpt-4o-mini",
+    target_deployment: str,
+    attacker_deployment: str,
+    scoring_deployment: str,
+    max_depth: int,
+) -> PAIRResult:
+    """
+    Async implementation. PyRIT's orchestrator API (0.6.0) is async-only:
+    the entry point is `run_attack_async`, not a synchronous `.run()`.
+    """
+    from pyrit.common import initialize_pyrit, IN_MEMORY
+    from pyrit.orchestrator import PAIROrchestrator
+    from pyrit.prompt_target import OpenAIChatTarget
+
+    # PyRIT keeps conversation state in a memory backend. IN_MEMORY is the
+    # right choice for a one-off CI scan; initialize_pyrit() must run once
+    # before any orchestrator or target is constructed.
+    initialize_pyrit(memory_db_type=IN_MEMORY)
+
+    # OpenAIChatTarget's real constructor param is `deployment_name`, not
+    # `model_name`. is_azure_target=False selects the direct OpenAI API
+    # (the default assumes an Azure OpenAI deployment).
+    objective_target = OpenAIChatTarget(
+        deployment_name=target_deployment, is_azure_target=False
+    )
+    adversarial_chat = OpenAIChatTarget(
+        deployment_name=attacker_deployment, is_azure_target=False
+    )
+    scoring_target = OpenAIChatTarget(
+        deployment_name=scoring_deployment, is_azure_target=False
+    )
+
+    # PAIROrchestrator requires objective_target, adversarial_chat, and
+    # scoring_target (all keyword-only) — not prompt_target=/
+    # red_teaming_chat=/conversation_objective=/max_turns=/memory=.
+    orchestrator = PAIROrchestrator(
+        objective_target=objective_target,
+        adversarial_chat=adversarial_chat,
+        scoring_target=scoring_target,
+        depth=max_depth,
+    )
+
+    # The real result object (TAPAttackResult, a MultiTurnAttackResult
+    # subclass) exposes conversation_id / achieved_objective / objective —
+    # it has no .final_prompt, .turns_used, or .final_response attributes.
+    result = await orchestrator.run_attack_async(objective=objective)
+
+    jailbreak_prompt: Optional[str] = None
+    final_response = ""
+    iterations_used = 0
+    if result.achieved_objective:
+        # The actual prompt/response text lives in orchestrator memory,
+        # keyed by conversation_id, not on the result object itself.
+        conversation = [
+            piece for piece in orchestrator.get_memory()
+            if piece.conversation_id == result.conversation_id
+        ]
+        user_turns = [p for p in conversation if p.role == "user"]
+        assistant_turns = [p for p in conversation if p.role == "assistant"]
+        iterations_used = len(assistant_turns)
+        if user_turns:
+            jailbreak_prompt = user_turns[-1].converted_value
+        if assistant_turns:
+            final_response = assistant_turns[-1].converted_value
+
+    return PAIRResult(
+        success=result.achieved_objective,
+        jailbreak_prompt=jailbreak_prompt,
+        iterations_used=iterations_used,
+        final_response=final_response,
+    )
+
+
+def run_pyrit_pair_attack(
+    objective: str,
+    target_deployment: str = "gpt-4o-mini",
+    attacker_deployment: str = "gpt-4o-mini",
+    scoring_deployment: str = "gpt-4o-mini",
+    max_depth: int = 3,
 ) -> PAIRResult:
     """
     Run the PAIR (Prompt Automatic Iterative Refinement) attack using PyRIT.
 
     PAIR iteratively refines jailbreak prompts using a separate attacker LLM
-    until the target model complies or the iteration budget is exhausted.
+    until the target model complies or the depth budget is exhausted. This
+    function is a synchronous wrapper around `_run_pyrit_pair_attack_async`
+    (via `asyncio.run`) for callers, such as a CI step, that expect a plain
+    function call rather than an awaitable.
 
     Requires: pip install pyrit==0.6.0
     Reference: Chao et al., "Jailbreaking Black Box Large Language Models in
                Twenty Queries," NeurIPS 2023.
     """
     try:
-        from pyrit.orchestrator import PAIROrchestrator
-        from pyrit.prompt_target import OpenAIChatTarget
-        from pyrit.common import IN_MEMORY
+        from pyrit.common import initialize_pyrit, IN_MEMORY  # noqa: F401
+        from pyrit.orchestrator import PAIROrchestrator  # noqa: F401
+        from pyrit.prompt_target import OpenAIChatTarget  # noqa: F401
     except ImportError:
         raise RuntimeError(
             "pyrit not installed. Run: pip install pyrit==0.6.0"
         )
 
-    target = OpenAIChatTarget(
-        endpoint=target_url,
-        model_name="gpt-4o-mini",
-    )
-
-    attacker = OpenAIChatTarget(
-        model_name=attacker_model,
-    )
-
-    orchestrator = PAIROrchestrator(
-        prompt_target=target,
-        red_teaming_chat=attacker,
-        conversation_objective=objective,
-        max_turns=max_iterations,
-        memory=IN_MEMORY,
-    )
-
-    result = orchestrator.run()
-
-    return PAIRResult(
-        success=result.achieved_objective,
-        jailbreak_prompt=result.final_prompt if result.achieved_objective else None,
-        iterations_used=result.turns_used,
-        final_response=result.final_response or "",
+    return asyncio.run(
+        _run_pyrit_pair_attack_async(
+            objective=objective,
+            target_deployment=target_deployment,
+            attacker_deployment=attacker_deployment,
+            scoring_deployment=scoring_deployment,
+            max_depth=max_depth,
+        )
     )
 
 
@@ -478,7 +540,7 @@ class RedTeamOrchestrator:
         pyrit_objective: str = "",
         promptfoo_results: Optional[dict[str, Any]] = None,
         ci_critical_threshold: int = 0,
-        ci_high_threshold: int = 3,
+        ci_high_threshold: int = 2,
     ) -> OrchestratorReport:
         all_findings: list[RedTeamFinding] = []
 
@@ -646,7 +708,12 @@ def ci_red_team_gate(
     Exit-code convention:
       0  — All gates passed; safe to proceed with deployment.
       1  — Policy violation; block deployment.
-      2  — Tool error or incomplete scan; block deployment pending investigation.
+
+    A scanner that fails to run (subprocess error, missing credentials) is
+    handled upstream: run_garak_scan returns a stub report with zero
+    findings rather than raising, so a tool failure surfaces as "0 findings"
+    here, not as a distinct exit code. Treat an unexpectedly clean report as
+    a signal to check the scan logs, not as proof the model is safe.
 
     Usage in CI:
         sys.exit(ci_red_team_gate(report))
@@ -816,7 +883,7 @@ def coverage_gap_report(test_cases: list[TaggedTestCase]) -> str:
 
 # ---------------------------------------------------------------------------
 # Listing 6.5: RAG retrieval manipulation test for the automated scan suite
-# Requirements: your RAG client library, numpy (pip install numpy)
+# Requirements: your RAG client library
 # ---------------------------------------------------------------------------
 
 class RAGClient(Protocol):
@@ -1011,7 +1078,7 @@ def batch_scan_cot_traces(
 
 # ---------------------------------------------------------------------------
 # Listing 6.7: Step-extraction probe for reasoning models
-# Requirements: openai>=1.30.0,<2.0 (or anthropic>=0.40.0,<1.0 for Claude)
+# Requirements: openai>=1.35.0,<2.0 (or anthropic>=0.40.0,<1.0 for Claude)
 # ---------------------------------------------------------------------------
 
 STEP_EXTRACTION_PROBES = [

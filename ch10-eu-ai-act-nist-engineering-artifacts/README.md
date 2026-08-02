@@ -18,11 +18,13 @@ Generate the Annex IV technical documentation required by the EU AI Act for high
 - **NistTriageReport** (Listing 10.4b) — prioritizes the 20 NIST AI 600-1 actions from section 10.5.1 by cluster; `gap_summary()` is the sprint backlog
 - **NISTAI6001Tracker** (Listing 10.5) — tracks per-control implementation status and evidence paths; `gap_report()` returns a coverage percentage plus the list of open gaps
 - **generate_dual_framework_report()** (Listing 10.6) — merges Annex IV completeness and NIST coverage into one report with an `overall_status` field (80% NIST coverage threshold)
-- **PostMarketMonitoringReport** (Listing 10.8c) — monthly EU AI Act post-market monitoring report; `requires_regulatory_notification()` flags any P0 incident for legal review
-- **IncidentEscalation** — tracks EU AI Act Article 73 notification timelines (standard 15-day, 2-day, 10-day windows); emits `sla_status()` for monitoring dashboards showing breached, warning, and complete phases
-- **Article73NotificationPackage** — serializes the 72h and 15-day documentation packages with `is_72h_complete()` and `is_15d_complete()` completeness flags; `days_until_deadline()` drives daily alerting
-- **IncidentClassifier** — classifies incidents as P0/P1/P2 using chapter 7 telemetry fields (`tripwire_fired`, `cusum_alert`, `cognitive_degradation_level`); starts the Article 73 clock on P0; returns `ClassificationResult` with rationale and SLA target
-- **ContainmentRunbook** — executes Steps 1–4 of the containment playbook (fallback routing, memory freeze, credential revocation, state snapshot) with independent `try/except` per step; produces a `fully_contained` flag without aborting on partial failure
+- **IncidentEscalation** (Listing 10.7) — tracks EU AI Act Article 73 notification timelines (standard 15-day, 2-day, 10-day windows); emits `sla_status()` for monitoring dashboards showing breached, warning, and complete phases
+- **Article73NotificationPackage** (Listing 10.8) — serializes the 72h and 15-day documentation packages with `is_72h_complete()` and `is_15d_complete()` completeness flags; `days_until_deadline()` drives daily alerting
+- **PostMarketMonitoringReport** (Listing 10.9) — monthly EU AI Act post-market monitoring report; `requires_regulatory_notification()` flags any P0 incident for legal review
+- **ContainmentRunbook** (Listing 10.10) — executes Steps 1–4 of the containment playbook (fallback routing, memory freeze, credential revocation, state snapshot) with independent `try/except` per step; produces a `fully_contained` flag without aborting on partial failure
+- **IncidentCapture** (Listing 10.11) — automated P0/P1 state capture tool; packages session logs, tripwire event, action log tail, and memory snapshot into a single JSON artifact using only the Python standard library
+- **annex_iv_ci_gate()** (Listing 10.12) — merge-blocking CI/CD signal #10; checks Annex IV package completeness, model-version match, and artifact freshness
+- **IncidentClassifier** (described in section 10.8.2; not yet assigned a listing number in the manuscript) — classifies incidents as P0/P1/P2 using chapter 7 telemetry fields (`tripwire_fired`, `cusum_alert`, `cognitive_degradation_level`); starts the Article 73 clock on P0; returns `ClassificationResult` with rationale and SLA target
 
 ## Prerequisites
 

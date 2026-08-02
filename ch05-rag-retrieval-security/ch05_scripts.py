@@ -282,7 +282,7 @@ def similarity_search_pgvector(
 @dataclass
 class AnomalyDetectionResult:
     is_anomaly: bool
-    score: float          # Mahalanobis-approximated distance
+    score: float          # embedding L2 norm
     tukey_fence: float
     explanation: str
 
