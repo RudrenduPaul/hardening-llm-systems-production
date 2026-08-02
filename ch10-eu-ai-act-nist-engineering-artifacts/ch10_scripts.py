@@ -817,165 +817,6 @@ def annex_iv_ci_gate(
     return True
 
 
-# ---------------------------------------------------------------------------
-# __main__ — demonstrate all components end-to-end
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import tempfile
-
-    print("=" * 70)
-    print("Chapter 10 — EU AI Act + NIST AI RMF Compliance Demo")
-    print("=" * 70)
-
-    with tempfile.TemporaryDirectory(prefix="ch10_demo_") as tmpdir:
-        tmp = Path(tmpdir)
-
-        # --- 0. Seed placeholder artifact files the index/package check for ---
-        for name in (
-            "red-team-report.pdf", "bias-assessment.md",
-            "evaluation-results.json", "adversarial-robustness.json",
-        ):
-            (tmp / name).write_text("placeholder artifact content")
-
-        # --- 1. Annex IV artifact index (Listing 10.0) ---
-        print("\n--- Annex IV Artifact Index ---")
-        deployment_config = {
-            "red_team_report_path": str(tmp / "red-team-report.pdf"),
-            "evaluation_results_path": str(tmp / "evaluation-results.json"),
-        }
-        index = generate_annex_iv_index(deployment_config)
-        print(f"Ready for audit: {index['ready_for_audit']}")
-        print(f"Sections with gaps: {index['sections_with_gaps']}")
-
-        # --- 2. Build a complete Annex IV package (Listing 10.1) ---
-        pkg = AnnexIVPackage(
-            system_name="CustomerCareBot",
-            system_version="2.1.0",
-            intended_purpose="Automated tier-1 customer support for retail banking",
-            deployment_date="2026-01-15",
-            operator_name="Acme Financial AI Ltd.",
-            model_family="GPT-4",
-            model_version="2024-08-06",
-            training_data_description="Fine-tuned on 2.3M anonymized support transcripts (2021-2023).",
-            architecture_description="RAG pipeline over policy documents with a GPT-4 generation layer.",
-            components=["retrieval-service", "generation-service", "guardrail-filter"],
-            monitoring_metrics=["hallucination_rate", "pii_detection_rate", "latency_p99"],
-            alert_thresholds={"hallucination_rate": 0.05, "pii_detection_rate": 0.01},
-            human_oversight_design="Agents can escalate any conversation; override available at all times.",
-            risk_categories_addressed=["Confabulation", "Data Privacy", "Human-AI Config"],
-            red_team_report_path=str(tmp / "red-team-report.pdf"),
-            bias_assessment_path=str(tmp / "bias-assessment.md"),
-            adversarial_robustness_path=str(tmp / "adversarial-robustness.json"),
-            evaluation_results_path=str(tmp / "evaluation-results.json"),
-        )
-        print(f"\nAnnex IV completeness: {pkg.completeness_score():.2%}")
-        print(f"Missing required fields: {pkg.missing_required_fields()}")
-
-        # --- 3. Run CI gate (Listing 10.2) ---
-        print("\n--- Annex IV CI Gate ---")
-        package_path = tmp / "annex-iv-package.json"
-        pkg.to_json(package_path)
-        check_annex_iv_completeness(str(package_path))
-
-        # --- 3b. Merge-blocking CI/CD gate with version + freshness checks (Listing 10.12) ---
-        print("\n--- Annex IV CI/CD Merge Gate ---")
-        annex_iv_ci_gate(str(package_path), current_model_version=pkg.system_version)
-
-        # --- 4. Output provenance recorder (Listing 10.3) ---
-        print("\n--- Output Provenance Recorder ---")
-        record = create_provenance_record(
-            model_id="gpt-4o",
-            model_version="2024-08-06",
-            prompt_template_version="v3.1",
-            session_id="sess-abc123",
-            user_input="What is my account balance?",
-            model_output="Your current balance is EUR 1,240.00.",
-            signing_key=b"dev-only-signing-key",
-        )
-        print(f"Provenance record ID: {record.record_id}")
-        print(f"Signature valid: {verify_provenance_record(record, signing_key=b'dev-only-signing-key')}")
-        record.output_hash = "tampered_hash"
-        print(
-            "Signature valid after tamper: "
-            f"{verify_provenance_record(record, signing_key=b'dev-only-signing-key')}"
-        )
-
-        # --- 5. TamperEvidentAuditLog (Listing 10.4) ---
-        print("\n--- Tamper-Evident Audit Log ---")
-        log = TamperEvidentAuditLog(str(tmp / "audit.jsonl"))
-        log.append("model_deployment", {"version": "2.1.0", "deployed_by": "mlops-pipeline"})
-        log.append("policy_update", {"policy": "rate_limit", "new_value": 100})
-        log.append("incident_detected", {"severity": "low", "description": "Unusual prompt pattern"})
-        print(f"Integrity check: {log.verify_integrity()}")
-
-        # --- 6. NIST AI 600-1 triage report (Listing 10.4b) ---
-        print("\n--- NIST AI 600-1 Triage Report ---")
-        triage = NistTriageReport(deployment_type="rag", risk_level="high")
-        triage.add_action(NistAction(
-            action_id="output-validation-1", cluster="Output validation",
-            description="Maintain a golden evaluation dataset",
-            engineering_artifact="Golden eval dataset + CI job",
-            book_reference="Ch 2",
-        ))
-        triage.add_action(NistAction(
-            action_id="human-oversight-1", cluster="Human oversight design",
-            description="Build a kill switch reachable within five minutes",
-            engineering_artifact="Kill switch + on-call runbook",
-            book_reference="Section 10.3.1",
-        ))
-        triage.mark_implemented("output-validation-1", evidence_path=str(tmp / "evaluation-results.json"))
-        gap_summary = triage.gap_summary()
-        print(f"Implemented: {gap_summary['implemented_count']}/{gap_summary['total_actions']}")
-        print(f"Gaps: {[g['action_id'] for g in gap_summary['gaps']]}")
-
-        # --- 7. NIST AI 600-1 control tracker (Listing 10.5) ---
-        print("\n--- NIST AI 600-1 Control Tracker ---")
-        tracker = NISTAI6001Tracker()
-        tracker.add_control(NISTControl(control_id="GV-1.1", risk_category="Govern",
-                                         description="Policies for organizational TEVV"))
-        tracker.add_control(NISTControl(control_id="MS-1.1", risk_category="Measure",
-                                         description="AI system risks are identified and assessed"))
-        tracker.add_control(NISTControl(control_id="MG-4.1", risk_category="Manage",
-                                         description="Post-deployment risks are monitored"))
-        tracker.update_status("GV-1.1", ImplementationStatus.VERIFIED,
-                               owner="AI Governance Team", evidence_path="governance-policy-v3.pdf")
-        tracker.update_status("MS-1.1", ImplementationStatus.IN_PROGRESS, owner="Risk Team")
-        gap = tracker.gap_report()
-        print(f"Coverage: {gap['coverage_percentage']}%")
-        print(f"Summary: {gap['summary']}")
-
-        # --- 8. Dual-framework mapping report (Listing 10.6) ---
-        print("\n--- Dual-Framework Mapping Report ---")
-        dual_report_path = tmp / "compliance-report.json"
-        dual_json = generate_dual_framework_report(pkg, tracker, str(dual_report_path))
-        dual_report = json.loads(dual_json)
-        print(f"Overall status: {dual_report['overall_status']}")
-        print(f"NIST coverage: {dual_report['nist_coverage']['coverage_percentage']}%")
-
-        # --- 9. PostMarketMonitoringReport (Listing 10.9) ---
-        print("\n--- Post-Market Monitoring Report ---")
-        pmm = PostMarketMonitoringReport(
-            system_name="CustomerCareBot",
-            system_version="2.1.0",
-            reporting_period_start="2026-07-01",
-            reporting_period_end="2026-07-31",
-            total_queries=148_320,
-            hallucination_rate=0.031,
-            pii_detection_rate=0.004,
-            bias_gap_max=0.06,
-            incidents_p0=0,
-            incidents_p1=1,
-            incidents_p2=3,
-            serious_incidents_reported=0,
-            trend_alerts=["hallucination rate stable over trailing 30 days"],
-        )
-        print(f"Requires regulatory notification: {pmm.requires_regulatory_notification()}")
-
-    print("\n" + "=" * 70)
-    print("All Chapter 10 components demonstrated successfully.")
-    print("=" * 70)
-
 
 # ---------------------------------------------------------------------------
 # === Sections 10.7-10.8: Post-Market Monitoring and AI Incident Response ===
@@ -1515,3 +1356,270 @@ class IncidentClassifier:
             article_73_clock_starts=False,
             resolve_within_hours=0,
         )
+# ---------------------------------------------------------------------------
+# __main__ — demonstrate all components end-to-end
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import tempfile
+
+    print("=" * 70)
+    print("Chapter 10 — EU AI Act + NIST AI RMF Compliance Demo")
+    print("=" * 70)
+
+    with tempfile.TemporaryDirectory(prefix="ch10_demo_") as tmpdir:
+        tmp = Path(tmpdir)
+
+        # --- 0. Seed placeholder artifact files the index/package check for ---
+        for name in (
+            "red-team-report.pdf", "bias-assessment.md",
+            "evaluation-results.json", "adversarial-robustness.json",
+        ):
+            (tmp / name).write_text("placeholder artifact content")
+
+        # --- 1. Annex IV artifact index (Listing 10.0) ---
+        print("\n--- Annex IV Artifact Index ---")
+        deployment_config = {
+            "red_team_report_path": str(tmp / "red-team-report.pdf"),
+            "evaluation_results_path": str(tmp / "evaluation-results.json"),
+        }
+        index = generate_annex_iv_index(deployment_config)
+        print(f"Ready for audit: {index['ready_for_audit']}")
+        print(f"Sections with gaps: {index['sections_with_gaps']}")
+
+        # --- 2. Build a complete Annex IV package (Listing 10.1) ---
+        pkg = AnnexIVPackage(
+            system_name="CustomerCareBot",
+            system_version="2.1.0",
+            intended_purpose="Automated tier-1 customer support for retail banking",
+            deployment_date="2026-01-15",
+            operator_name="Acme Financial AI Ltd.",
+            model_family="GPT-4",
+            model_version="2024-08-06",
+            training_data_description="Fine-tuned on 2.3M anonymized support transcripts (2021-2023).",
+            architecture_description="RAG pipeline over policy documents with a GPT-4 generation layer.",
+            components=["retrieval-service", "generation-service", "guardrail-filter"],
+            monitoring_metrics=["hallucination_rate", "pii_detection_rate", "latency_p99"],
+            alert_thresholds={"hallucination_rate": 0.05, "pii_detection_rate": 0.01},
+            human_oversight_design="Agents can escalate any conversation; override available at all times.",
+            risk_categories_addressed=["Confabulation", "Data Privacy", "Human-AI Config"],
+            red_team_report_path=str(tmp / "red-team-report.pdf"),
+            bias_assessment_path=str(tmp / "bias-assessment.md"),
+            adversarial_robustness_path=str(tmp / "adversarial-robustness.json"),
+            evaluation_results_path=str(tmp / "evaluation-results.json"),
+        )
+        print(f"\nAnnex IV completeness: {pkg.completeness_score():.2%}")
+        print(f"Missing required fields: {pkg.missing_required_fields()}")
+
+        # --- 3. Run CI gate (Listing 10.2) ---
+        print("\n--- Annex IV CI Gate ---")
+        package_path = tmp / "annex-iv-package.json"
+        pkg.to_json(package_path)
+        check_annex_iv_completeness(str(package_path))
+
+        # --- 3b. Merge-blocking CI/CD gate with version + freshness checks (Listing 10.12) ---
+        print("\n--- Annex IV CI/CD Merge Gate ---")
+        annex_iv_ci_gate(str(package_path), current_model_version=pkg.system_version)
+
+        # --- 4. Output provenance recorder (Listing 10.3) ---
+        print("\n--- Output Provenance Recorder ---")
+        record = create_provenance_record(
+            model_id="gpt-4o",
+            model_version="2024-08-06",
+            prompt_template_version="v3.1",
+            session_id="sess-abc123",
+            user_input="What is my account balance?",
+            model_output="Your current balance is EUR 1,240.00.",
+            signing_key=b"dev-only-signing-key",
+        )
+        print(f"Provenance record ID: {record.record_id}")
+        print(f"Signature valid: {verify_provenance_record(record, signing_key=b'dev-only-signing-key')}")
+        record.output_hash = "tampered_hash"
+        print(
+            "Signature valid after tamper: "
+            f"{verify_provenance_record(record, signing_key=b'dev-only-signing-key')}"
+        )
+
+        # --- 5. TamperEvidentAuditLog (Listing 10.4) ---
+        print("\n--- Tamper-Evident Audit Log ---")
+        log = TamperEvidentAuditLog(str(tmp / "audit.jsonl"))
+        log.append("model_deployment", {"version": "2.1.0", "deployed_by": "mlops-pipeline"})
+        log.append("policy_update", {"policy": "rate_limit", "new_value": 100})
+        log.append("incident_detected", {"severity": "low", "description": "Unusual prompt pattern"})
+        print(f"Integrity check: {log.verify_integrity()}")
+
+        # --- 6. NIST AI 600-1 triage report (Listing 10.4b) ---
+        print("\n--- NIST AI 600-1 Triage Report ---")
+        triage = NistTriageReport(deployment_type="rag", risk_level="high")
+        triage.add_action(NistAction(
+            action_id="output-validation-1", cluster="Output validation",
+            description="Maintain a golden evaluation dataset",
+            engineering_artifact="Golden eval dataset + CI job",
+            book_reference="Ch 2",
+        ))
+        triage.add_action(NistAction(
+            action_id="human-oversight-1", cluster="Human oversight design",
+            description="Build a kill switch reachable within five minutes",
+            engineering_artifact="Kill switch + on-call runbook",
+            book_reference="Section 10.3.1",
+        ))
+        triage.mark_implemented("output-validation-1", evidence_path=str(tmp / "evaluation-results.json"))
+        gap_summary = triage.gap_summary()
+        print(f"Implemented: {gap_summary['implemented_count']}/{gap_summary['total_actions']}")
+        print(f"Gaps: {[g['action_id'] for g in gap_summary['gaps']]}")
+
+        # --- 7. NIST AI 600-1 control tracker (Listing 10.5) ---
+        print("\n--- NIST AI 600-1 Control Tracker ---")
+        tracker = NISTAI6001Tracker()
+        tracker.add_control(NISTControl(control_id="GV-1.1", risk_category="Govern",
+                                         description="Policies for organizational TEVV"))
+        tracker.add_control(NISTControl(control_id="MS-1.1", risk_category="Measure",
+                                         description="AI system risks are identified and assessed"))
+        tracker.add_control(NISTControl(control_id="MG-4.1", risk_category="Manage",
+                                         description="Post-deployment risks are monitored"))
+        tracker.update_status("GV-1.1", ImplementationStatus.VERIFIED,
+                               owner="AI Governance Team", evidence_path="governance-policy-v3.pdf")
+        tracker.update_status("MS-1.1", ImplementationStatus.IN_PROGRESS, owner="Risk Team")
+        gap = tracker.gap_report()
+        print(f"Coverage: {gap['coverage_percentage']}%")
+        print(f"Summary: {gap['summary']}")
+
+        # --- 8. Dual-framework mapping report (Listing 10.6) ---
+        print("\n--- Dual-Framework Mapping Report ---")
+        dual_report_path = tmp / "compliance-report.json"
+        dual_json = generate_dual_framework_report(pkg, tracker, str(dual_report_path))
+        dual_report = json.loads(dual_json)
+        print(f"Overall status: {dual_report['overall_status']}")
+        print(f"NIST coverage: {dual_report['nist_coverage']['coverage_percentage']}%")
+
+        # --- 9. PostMarketMonitoringReport (Listing 10.9) ---
+        print("\n--- Post-Market Monitoring Report ---")
+        pmm = PostMarketMonitoringReport(
+            system_name="CustomerCareBot",
+            system_version="2.1.0",
+            reporting_period_start="2026-07-01",
+            reporting_period_end="2026-07-31",
+            total_queries=148_320,
+            hallucination_rate=0.031,
+            pii_detection_rate=0.004,
+            bias_gap_max=0.06,
+            incidents_p0=0,
+            incidents_p1=1,
+            incidents_p2=3,
+            serious_incidents_reported=0,
+            trend_alerts=["hallucination rate stable over trailing 30 days"],
+        )
+        print(f"Requires regulatory notification: {pmm.requires_regulatory_notification()}")
+
+        # --- 10. IncidentEscalation (Listing 10.7) ---
+        print("\n--- Incident Escalation Pipeline (Article 73 SLA) ---")
+        escalation = IncidentEscalation(
+            incident_id="INC-2026-0142",
+            agent_name="CustomerCareBot",
+        )
+        escalation.advance(EscalationPhase.ACKNOWLEDGED, completed_by="oncall-jsmith")
+        escalation.advance(
+            EscalationPhase.CLASSIFIED,
+            completed_by="oncall-jsmith",
+            notes="Confirmed WRITE_WITHOUT_READ tripwire; reversible impact.",
+            is_article_73_candidate=True,
+        )
+        sla = escalation.sla_status()
+        print(f"Current phase: {escalation.current_phase.value}")
+        print(f"Is Article 73 candidate: {escalation.is_article_73_candidate}")
+        print(f"Article 73 deadline: {sla['article_73_deadline']}")
+        print(f"Legal review SLA state: {sla['legal_reviewed']['state']}")
+
+        # --- 11. Article73NotificationPackage (Listing 10.8) ---
+        print("\n--- Article 73 Notification Package ---")
+        now = time.time()
+        notification = Article73NotificationPackage(
+            incident_id="INC-2026-0142",
+            awareness_timestamp=now,
+            incident_timestamp=now - 300,
+            agent_name="CustomerCareBot",
+            system_description="Tier-1 customer support agent with RAG document access",
+            affected_users_count=0,
+            incident_description="Agent wrote to an unread backup export path after a prompt injection.",
+            initial_impact_assessment="No confirmed data loss; write did not reach persistent storage.",
+            containment_actions=["fallback_routing_enabled", "credentials_revoked"],
+        )
+        print(f"72h package complete: {notification.is_72h_complete()}")
+        print(f"15-day package complete: {notification.is_15d_complete()}")
+        print(f"Days until deadline: {notification.days_until_deadline():.2f}")
+        notification.root_cause = "Prompt injection in retrieved document overrode task scope."
+        notification.corrective_measures = ["Added scope-check tripwire", "Tightened tool allowlist"]
+        notification.monitoring_improvements = ["Added WRITE_WITHOUT_READ tripwire to CI regression suite"]
+        print(f"15-day package complete after follow-up: {notification.is_15d_complete()}")
+
+        # --- 12. ContainmentRunbook (Listing 10.10), with a simulated partial failure ---
+        print("\n--- Containment Runbook (simulated partial failure) ---")
+
+        class _MockFallbackRouter:
+            def enable_fallback(self, agent_id: str) -> None:
+                pass  # succeeds
+
+        class _MockMemoryStore:
+            def freeze(self, agent_id: str) -> None:
+                raise RuntimeError("memory store unreachable")  # simulated failure
+
+        class _MockCredentialManager:
+            def revoke(self, agent_id: str) -> None:
+                pass  # succeeds
+
+        class _MockStateCapture:
+            def snapshot(self, agent_id: str, incident_type: str) -> None:
+                pass  # succeeds
+
+        runbook = ContainmentRunbook(
+            fallback_router=_MockFallbackRouter(),
+            memory_store=_MockMemoryStore(),
+            credential_manager=_MockCredentialManager(),
+            state_capture=_MockStateCapture(),
+        )
+        containment_result = runbook.execute_containment(
+            agent_id="agent-cc-014", incident_type="WRITE_WITHOUT_READ"
+        )
+        print(f"Steps completed: {containment_result.steps_completed}")
+        print(f"Steps failed: {containment_result.steps_failed}")
+        print(f"Fully contained: {containment_result.fully_contained}")
+
+        # --- 13. IncidentCapture (Listing 10.11) ---
+        print("\n--- Incident State Capture ---")
+        capture = IncidentCapture(incident_dir=str(tmp / "incidents"))
+        incident_id = capture.capture(
+            session_id="sess-abc123",
+            severity="P1",
+            tripwire_event={
+                "rule_name": "WRITE_WITHOUT_READ",
+                "context": {"resource": "/exports/backup.txt"},
+                "timestamp": time.time(),
+            },
+            action_log=[
+                {"step": 1, "action": "read_document", "resource": "/docs/invoice-001.pdf"},
+                {"step": 2, "action": "write_classification", "resource": "/exports/backup.txt"},
+            ],
+            memory_segments=[{"segment": "task_context", "content": "Summarize invoice batch"}],
+            agent_name="CustomerCareBot",
+        )
+        print(f"Incident capture written with ID: {incident_id}")
+
+        # --- 14. IncidentClassifier (sections 10.7-10.8) ---
+        print("\n--- Incident Classifier ---")
+        classifier = IncidentClassifier()
+        classification_input = ClassificationInput(
+            tripwire_fired=True,
+            tripwire_rule="WRITE_WITHOUT_READ",
+            action_was_irreversible=False,
+            scope_violation_confirmed=False,
+        )
+        classification = classifier.classify(classification_input)
+        print(f"Severity: {classification.severity}")
+        print(f"Rationale: {classification.rationale}")
+        print(f"Article 73 clock starts: {classification.article_73_clock_starts}")
+        print(f"Resolve within: {classification.resolve_within_hours}h")
+
+    print("\n" + "=" * 70)
+    print("All Chapter 10 components demonstrated successfully.")
+    print("=" * 70)
+

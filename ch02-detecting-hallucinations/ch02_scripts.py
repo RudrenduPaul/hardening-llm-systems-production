@@ -15,7 +15,7 @@ Implements:
   - HallucinationGate: CI/CD gate-compatible scorer wrapper
 
 Requirements:
-    deepeval==0.21.7
+    deepeval==0.21.1
     ragas==0.1.21
     scikit-learn>=1.3.0,<2.0
     scipy>=1.11.0,<2.0
@@ -365,7 +365,7 @@ class HallucinationMetric:
             context=context,
             score=score,
             passed=score <= self.threshold,
-            reason="[MOCK — install deepeval==0.21.7 for real scoring]",
+            reason="[MOCK — install deepeval==0.21.1 for real scoring]",
         )
 
     def summary_stats(self, results: list[HallucinationResult]) -> dict:
@@ -1246,7 +1246,7 @@ def main() -> None:
 
     if not _DEEPEVAL_AVAILABLE:
         print("\n[NOTE] deepeval not installed — using mock scorer.")
-        print("       pip install deepeval==0.21.7\n")
+        print("       pip install deepeval==0.21.1\n")
     if not _RAGAS_AVAILABLE:
         print("[NOTE] ragas not installed — using mock scorer.")
         print("       pip install ragas==0.1.21\n")

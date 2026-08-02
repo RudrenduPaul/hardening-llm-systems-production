@@ -521,7 +521,7 @@ def build_nemo_rails(colang_content: str = COLANG_POLICY, config_yaml: str = NEM
         categories = result.results[0].category_scores
         hate_score = max(
             getattr(categories, "hate", 0.0) or 0.0,
-            getattr(categories, "hate/threatening", 0.0) or 0.0,
+            getattr(categories, "hate_threatening", 0.0) or 0.0,
         )
         return {"score": float(hate_score)}
 
@@ -600,9 +600,9 @@ def validate_output(
     try:
         outcome = guard.parse(llm_output=raw_output, num_reasks=max_reask)
         violations = [
-            str(f.error_message)
+            str(getattr(f, "failure_reason", ""))
             for f in getattr(outcome, "validation_summaries", []) or []
-            if getattr(f, "failure_level", None) == "fail"
+            if getattr(f, "validator_status", None) == "fail"
         ]
         return ContentValidationResult(
             passed=bool(outcome.validation_passed),

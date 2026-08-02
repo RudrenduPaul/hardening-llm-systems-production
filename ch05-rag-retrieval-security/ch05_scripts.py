@@ -953,7 +953,7 @@ if __name__ == "__main__":
     print(f"After 20 normal scores: CUSUM+ = {state.cusum_pos:.3f}, alert = {state.alert}")
 
     # Simulate a poisoning attack (scores suddenly spike to 0.99)
-    poison_scores = [0.99] * 15
+    poison_scores = [0.99] * 30
     for score in poison_scores:
         state = cusum.update(score)
         if state.alert:

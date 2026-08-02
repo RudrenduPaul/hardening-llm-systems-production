@@ -4,13 +4,19 @@ Hardening LLM Systems in Production — Companion Code
 Author: Rudrendu Paul | https://orcid.org/0009-0008-0141-4690
 
 Implements:
-  - HallucinationGate: CI gate class with sys.exit(1) on failure (Listing 3.2)
+  - HallucinationCheckGate: CI gate class with sys.exit(1) on failure (Listing 3.2)
+  - hash_prompt / evaluate_prompt_version: prompt version tracking against
+    the golden dataset (section 3.2.1)
+  - PROMPT_BEFORE / PROMPT_AFTER / EXAMPLES: before/after prompt comparison
+    with annotated expected behavior (Listing 3.3, section 3.2.2)
   - GateConfig + HallucinationCIGate: the complete CI/CD gate — config
-    management, the re-run policy, and baseline drift detection (Listing 3.7,
-    sections 3.7.1-3.7.3)
+    management, the re-run policy, baseline drift detection, and
+    concurrency-bounded scoring (Listing 3.7, sections 3.7.1-3.7.3)
   - SelfConsistencyChecker: sample N completions, measure agreement
   - ClaimDecompositionPipeline: decompose compound answers into atomic claims
   - ShadowTrafficHarness: replay production traffic against a candidate model
+  - canary_window_sizing: power-analysis-backed canary window duration
+    (section 3.6)
   - GitHub Actions YAML generation helper
 
 Requirements:
@@ -31,18 +37,23 @@ Usage:
     python ch03_scripts.py --consistency   # Run self-consistency demo
     python ch03_scripts.py --claims        # Run claim decomposition demo
     python ch03_scripts.py --shadow        # Run shadow traffic demo
+    python ch03_scripts.py --prompt-version # Run prompt version tracking demo
+    python ch03_scripts.py --canary-sizing # Run canary window sizing demo
     python ch03_scripts.py --gen-yaml      # Print the GitHub Actions YAML
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import random
 import sys
 import tempfile
 import textwrap
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -63,9 +74,15 @@ try:
 except ImportError:
     _PYDANTIC_AVAILABLE = False
 
+try:
+    from scipy.stats import norm as _scipy_norm
+    _SCIPY_AVAILABLE = True
+except ImportError:
+    _SCIPY_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
-# 1. HallucinationGate — the CI gate class
+# 1. HallucinationCheckGate — the CI gate class
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -88,7 +105,7 @@ class GateResult:
         )
 
 
-class HallucinationGate:
+class HallucinationCheckGate:
     """
     CI gate that enforces a hallucination score threshold on a test suite.
 
@@ -109,7 +126,7 @@ class HallucinationGate:
 
     Usage in CI script
     ------------------
-        gate = HallucinationGate(threshold=0.80)
+        gate = HallucinationCheckGate(threshold=0.80)
         results = gate.run(test_suite)
         gate.report(results)
         gate.enforce(results)  # sys.exit(1) if score < threshold
@@ -237,7 +254,7 @@ class HallucinationGate:
 # 1b. GateConfig + HallucinationCIGate — the complete CI/CD gate (Listing 3.7)
 # ---------------------------------------------------------------------------
 #
-# HallucinationGate above (Listing 3.2) is the minimal merge-blocking check:
+# HallucinationCheckGate above (Listing 3.2) is the minimal merge-blocking check:
 # one run, one threshold, one sys.exit(1). Section 3.7 assembles a more
 # complete gate on top of that idea — configuration management (3.7.1), a
 # re-run policy that absorbs judge-score flakiness (3.7.2), and baseline
@@ -326,7 +343,7 @@ class HallucinationCIGate:
     """
     The complete CI/CD hallucination gate (Listing 3.7).
 
-    Three layers on top of the single-shot HallucinationGate check:
+    Three layers on top of the single-shot HallucinationCheckGate check:
 
     1. Configuration management (section 3.7.1) — every tunable lives on
        GateConfig instead of being scattered across call sites.
@@ -375,9 +392,9 @@ class HallucinationCIGate:
         """
         Deterministic mock hallucination-rate score: 0.0 = fully grounded,
         1.0 = fully hallucinated. This is 1 minus the Jaccard token-overlap
-        scorer HallucinationGate uses for faithfulness, because GateConfig's
+        scorer HallucinationCheckGate uses for faithfulness, because GateConfig's
         `threshold` is a rate ceiling ("max acceptable hallucination rate"),
-        the opposite direction from HallucinationGate's faithfulness floor.
+        the opposite direction from HallucinationCheckGate's faithfulness floor.
         """
         ctx_tokens = set(
             w.lower() for passage in context for w in passage.split()
@@ -415,14 +432,27 @@ class HallucinationCIGate:
         return golden_dataset[start:] + golden_dataset[: (start + size) - n]
 
     def _run_once(self, golden_dataset: list[dict], attempt_index: int) -> float:
-        """Score one fresh sample slice and return the mean hallucination rate."""
+        """
+        Score one fresh sample slice and return the mean hallucination rate.
+
+        Scoring runs on a thread pool sized by `config.concurrency`
+        (section 3.1.2): each `self.scorer(...)` call is dispatched to a
+        worker thread, so `concurrency` real API calls (or, for the mock
+        scorer, real function calls) are in flight at once instead of
+        running the sample strictly one at a time. Threads, not asyncio,
+        because `scorer` is a plain synchronous callable — swapping in
+        `asyncio.gather` under a `Semaphore(config.concurrency)` is the
+        right move if you replace the scorer with an async client.
+        """
         sample = self._fresh_sample(golden_dataset, attempt_index)
         if not sample:
             return 1.0
-        scores = [
-            self.scorer(item["question"], item["answer"], item["context"])
-            for item in sample
-        ]
+        max_workers = max(1, min(self.config.concurrency, len(sample)))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            scores = list(pool.map(
+                lambda item: self.scorer(item["question"], item["answer"], item["context"]),
+                sample,
+            ))
         return round(sum(scores) / len(scores), 4)
 
     def run_with_rerun_policy(self, golden_dataset: list[dict]) -> CIGateResult:
@@ -590,6 +620,128 @@ class HallucinationCIGate:
 
 
 # ---------------------------------------------------------------------------
+# 1c. Prompt version tracking (section 3.2.1)
+# ---------------------------------------------------------------------------
+
+def hash_prompt(prompt: str) -> str:
+    """Short, stable content hash used to tag a system prompt version."""
+    return hashlib.sha256(prompt.encode()).hexdigest()[:12]
+
+
+def evaluate_prompt_version(
+    system_prompt: str,
+    golden_examples: list[dict],
+    threshold: float = 0.5,
+    completion_fn: Optional[Callable] = None,
+    scorer: Optional[Callable] = None,
+) -> dict:
+    """
+    Evaluate a system prompt version against the golden dataset (section 3.2.1).
+
+    Returns a summary result suitable for version comparison: the prompt's
+    content hash, the mean hallucination score across `golden_examples`,
+    and whether this version passes `threshold`.
+
+    Parameters
+    ----------
+    system_prompt : str
+        The prompt version under test. May contain `{name}`-style
+        placeholders filled from each example's `vars` dict.
+    golden_examples : list[dict]
+        Each dict needs a `"query"` key, and may include `"vars"` (format
+        substitutions for `system_prompt`) and `"context"` (list[str]
+        passed to `scorer`).
+    threshold : float
+        Max acceptable mean hallucination score. Default 0.5.
+    completion_fn : callable, optional
+        Function (question, system_prompt, model, temperature) -> str.
+        If None, uses the OpenAI API when `OPENAI_API_KEY` is set, else
+        `_mock_completion` — the same fallback `SelfConsistencyChecker` uses.
+    scorer : callable, optional
+        Function (question, answer, context) -> float, hallucination-rate
+        direction (0 = grounded, 1 = hallucinated). If None, uses
+        `HallucinationCIGate._mock_hallucination_rate_scorer`. Replace with
+        the `CombinedHallucinationScorer` from chapter 2 for production use.
+    """
+    import os
+    if completion_fn is not None:
+        fn = completion_fn
+    elif _OPENAI_AVAILABLE and os.environ.get("OPENAI_API_KEY"):
+        fn = _openai_completion
+    else:
+        fn = _mock_completion
+    score_fn = scorer or HallucinationCIGate._mock_hallucination_rate_scorer
+
+    scores = []
+    for ex in golden_examples:
+        prompt_text = system_prompt.format(**ex.get("vars", {}))
+        answer = fn(ex["query"], prompt_text, "gpt-4o-mini", 0.0)
+        scores.append(score_fn(ex["query"], answer, ex.get("context", [])))
+
+    mean_score = round(sum(scores) / len(scores), 4) if scores else 1.0
+    return {
+        "prompt_hash": hash_prompt(system_prompt),
+        "mean_hallucination_score": mean_score,
+        "threshold": threshold,
+        "passed": mean_score <= threshold,
+        "n_examples": len(golden_examples),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 1d. Before/after prompt comparison (Listing 3.3, section 3.2.2)
+# ---------------------------------------------------------------------------
+
+PROMPT_BEFORE = """You are a helpful customer service assistant for Acme Corp.
+Answer the user's question about our return policy."""
+
+PROMPT_AFTER = """You are a customer service assistant for Acme Corp.
+Answer ONLY based on the policy document provided below.
+If the user asks about something not covered in the document,
+say exactly: "I don't have information on that in our current policy.
+Please contact support@acme.com for clarification."
+
+Do not infer, extrapolate, or guess. If you are uncertain, use the fallback.
+
+POLICY DOCUMENT:
+{policy_text}
+"""
+
+EXAMPLES = [
+    {
+        "query": "Can I return a product after 60 days if it's defective?",
+        "policy_text": "Acme Corp accepts returns within 30 days of purchase "
+                       "for any reason. Defective items may be returned within "
+                       "90 days with proof of defect.",
+        "expected_before_behavior": "May hallucinate a 60-day defective-item "
+                                    "policy that does not exist.",
+        "expected_after_behavior": "States the 90-day defective-item window "
+                                   "explicitly from the policy.",
+    },
+    {
+        "query": "What is your holiday return extension policy?",
+        "policy_text": "Acme Corp accepts returns within 30 days of purchase "
+                       "for any reason. Defective items may be returned within "
+                       "90 days with proof of defect.",
+        "expected_before_behavior": "May fabricate a holiday extension policy.",
+        "expected_after_behavior": "Uses the fallback: states it has no "
+                                   "information on a holiday extension and "
+                                   "points the user to support@acme.com.",
+    },
+    {
+        "query": "Do you offer free return shipping on orders over $50?",
+        "policy_text": "Acme Corp accepts returns within 30 days of purchase "
+                       "for any reason. Defective items may be returned within "
+                       "90 days with proof of defect.",
+        "expected_before_behavior": "May invent a free-shipping threshold that "
+                                    "sounds plausible for a retail return policy.",
+        "expected_after_behavior": "Uses the fallback, since shipping cost is "
+                                   "not covered in the policy document.",
+    },
+]
+
+
+# ---------------------------------------------------------------------------
 # 2. SelfConsistencyChecker
 # ---------------------------------------------------------------------------
 
@@ -729,6 +881,35 @@ def _mock_completion(
         "Lyon is the capital of France.",   # intentional outlier
     ]
     return random.choice(candidates)
+
+
+def _mock_prompt_completion(
+    question: str, system_prompt: str, model: str, temperature: float
+) -> str:
+    """
+    Mock completion tuned for the prompt-version demo (`evaluate_prompt_version`,
+    section 3.2.1). Returns a plausible-sounding fabricated answer for the
+    loose PROMPT_BEFORE style, and a grounded, policy-quoting answer (or the
+    exact fallback string) for the strict PROMPT_AFTER style, so the demo
+    shows a real scoring difference between the two prompt versions instead
+    of two prompts scoring identically against an unrelated mock answer.
+    """
+    strict = "ONLY based on the policy document" in system_prompt
+    if "60 days" in question:
+        if strict:
+            return "Defective items may be returned within 90 days with proof of defect."
+        return "Yes, you can return it within 60 days since it's defective."
+    if "holiday" in question:
+        if strict:
+            return ("I don't have information on that in our current policy. "
+                     "Please contact support@acme.com for clarification.")
+        return "We extend the holiday return window by an extra 30 days."
+    if "free return shipping" in question:
+        if strict:
+            return ("I don't have information on that in our current policy. "
+                     "Please contact support@acme.com for clarification.")
+        return "Yes, orders over $50 get free return shipping."
+    return "I don't have information on that."
 
 
 # ---------------------------------------------------------------------------
@@ -1116,6 +1297,70 @@ def _jaccard_score(question: str, answer: str, context: list[str]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# 4b. Canary window sizing (section 3.6)
+# ---------------------------------------------------------------------------
+
+def canary_window_sizing(
+    baseline_rate: float,
+    detectable_shift: float,
+    total_qph: int,
+    canary_fraction: float = 0.05,
+    alpha: float = 0.05,
+    power: float = 0.80,
+) -> dict:
+    """
+    Compute the canary window duration required to reach statistical power
+    for detecting a hallucination rate regression (section 3.6).
+
+    Uses the standard two-proportion z-test sample-size formula: the
+    number of canary requests needed per arm to detect a shift from
+    `baseline_rate` to `baseline_rate + detectable_shift` at significance
+    `alpha` with `power`, then converts that sample size to a wall-clock
+    window given the canary's share of total traffic.
+
+    Args:
+        baseline_rate: Current production hallucination rate (e.g. 0.02 for 2%).
+        detectable_shift: Minimum shift to detect (e.g. 0.01 for 1 pp shift).
+        total_qph: Total queries per hour through the system.
+        canary_fraction: Fraction of traffic routed to canary (e.g. 0.05).
+        alpha: Significance level for the two-proportion z-test.
+        power: Desired statistical power (0.80 = 80%).
+
+    Returns:
+        dict with required sample size (`n_required`), the canary's
+        queries-per-hour (`canary_qph`), and the window duration in hours
+        (`window_hours`) needed to accumulate that sample.
+    """
+    if not _SCIPY_AVAILABLE:
+        raise ImportError(
+            "canary_window_sizing requires scipy (pip install scipy>=1.11.0)"
+        )
+
+    p1 = baseline_rate
+    p2 = baseline_rate + detectable_shift
+    p_pooled = (p1 + p2) / 2
+
+    z_alpha = _scipy_norm.ppf(1 - alpha / 2)
+    z_power = _scipy_norm.ppf(power)
+
+    numerator = (
+        z_alpha * math.sqrt(2 * p_pooled * (1 - p_pooled))
+        + z_power * math.sqrt(p1 * (1 - p1) + p2 * (1 - p2))
+    ) ** 2
+    denominator = (p2 - p1) ** 2
+    n_required = math.ceil(numerator / denominator)
+
+    canary_qph = total_qph * canary_fraction
+    window_hours = n_required / canary_qph if canary_qph > 0 else float("inf")
+
+    return {
+        "n_required": n_required,
+        "canary_qph": round(canary_qph, 2),
+        "window_hours": round(window_hours, 2),
+    }
+
+
+# ---------------------------------------------------------------------------
 # 5. GitHub Actions YAML generator
 # ---------------------------------------------------------------------------
 
@@ -1305,6 +1550,14 @@ def main() -> None:
     parser.add_argument("--consistency", action="store_true", help="Run self-consistency demo")
     parser.add_argument("--claims", action="store_true", help="Run claim decomposition demo")
     parser.add_argument("--shadow", action="store_true", help="Run shadow traffic demo")
+    parser.add_argument(
+        "--prompt-version", action="store_true",
+        help="Run prompt version tracking + before/after demo (section 3.2.1-3.2.2, Listing 3.3)",
+    )
+    parser.add_argument(
+        "--canary-sizing", action="store_true",
+        help="Run canary window power-analysis demo (section 3.6)",
+    )
     parser.add_argument("--gen-yaml", action="store_true", help="Print GitHub Actions YAML")
     parser.add_argument("--threshold", type=float, default=0.80)
     parser.add_argument("--suite", type=str, default=None)
@@ -1312,7 +1565,8 @@ def main() -> None:
 
     # If no flags given, run everything
     run_all = not any([
-        args.gate, args.ci_gate, args.consistency, args.claims, args.shadow, args.gen_yaml,
+        args.gate, args.ci_gate, args.consistency, args.claims, args.shadow,
+        args.prompt_version, args.canary_sizing, args.gen_yaml,
     ])
 
     print("\nChapter 3: Containing Hallucinations as a CI/CD-Blocking Metric")
@@ -1321,7 +1575,7 @@ def main() -> None:
 
     if args.gate or run_all:
         print("\n--- CI Gate Demo ---")
-        gate = HallucinationGate(threshold=args.threshold, exit_on_fail=False)
+        gate = HallucinationCheckGate(threshold=args.threshold, exit_on_fail=False)
 
         suite = DEMO_TEST_SUITE
         if args.suite:
@@ -1395,6 +1649,53 @@ def main() -> None:
         )
         report = harness.run(DEMO_TRAFFIC_LOGS, sample_pct=1.0)
         harness.print_report(report)
+
+    if args.prompt_version or run_all:
+        print("\n--- Prompt Version Tracking Demo (section 3.2.1, Listing 3.3) ---")
+        golden_examples = [
+            {
+                "query": ex["query"],
+                "vars": {"policy_text": ex["policy_text"]},
+                "context": [ex["policy_text"]],
+            }
+            for ex in EXAMPLES
+        ]
+        before_result = evaluate_prompt_version(
+            PROMPT_BEFORE, golden_examples, completion_fn=_mock_prompt_completion,
+        )
+        after_result = evaluate_prompt_version(
+            PROMPT_AFTER, golden_examples, completion_fn=_mock_prompt_completion,
+        )
+        print(f"  PROMPT_BEFORE  hash={before_result['prompt_hash']}  "
+              f"mean_score={before_result['mean_hallucination_score']:.4f}  "
+              f"passed={before_result['passed']}")
+        print(f"  PROMPT_AFTER   hash={after_result['prompt_hash']}  "
+              f"mean_score={after_result['mean_hallucination_score']:.4f}  "
+              f"passed={after_result['passed']}")
+        for ex in EXAMPLES:
+            print(f"    Q: {ex['query']}")
+            print(f"      before: {ex['expected_before_behavior']}")
+            print(f"      after : {ex['expected_after_behavior']}")
+
+    if args.canary_sizing or run_all:
+        print("\n--- Canary Window Sizing Demo (section 3.6) ---")
+        if _SCIPY_AVAILABLE:
+            small_shift = canary_window_sizing(
+                baseline_rate=0.05, detectable_shift=0.03,
+                total_qph=5000, canary_fraction=0.02,
+            )
+            print(f"  small-shift scenario: n_required={small_shift['n_required']} "
+                  f"canary_qph={small_shift['canary_qph']} "
+                  f"window_hours={small_shift['window_hours']}")
+            large_shift = canary_window_sizing(
+                baseline_rate=0.02, detectable_shift=0.01,
+                total_qph=1000, canary_fraction=0.05,
+            )
+            print(f"  3000-5000 request scenario: n_required={large_shift['n_required']} "
+                  f"canary_qph={large_shift['canary_qph']} "
+                  f"window_hours={large_shift['window_hours']}")
+        else:
+            print("  scipy not installed — skipping (pip install scipy>=1.11.0)")
 
     if args.gen_yaml or run_all:
         print_github_actions_yaml()

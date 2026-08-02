@@ -558,6 +558,11 @@ def main() -> None:
         default=None,
         help="Export report to a JSON file at the given path.",
     )
+    parser.add_argument(
+        "--skip-classify-demo",
+        action="store_true",
+        help="Skip the Listing 1.2 / 1.3 case-study classification demo.",
+    )
     args = parser.parse_args()
 
     if args.interactive:
@@ -572,9 +577,8 @@ def main() -> None:
     if args.export:
         report.export_json(args.export)
 
-
-if __name__ == "__main__":
-    main()
+    if not args.interactive and not args.skip_classify_demo:
+        classify_case_studies_demo()
 
 
 # === Listings 1.1-1.6: NVD scanner, incident tagger, property classifier, exposure map, readiness report ===
@@ -994,6 +998,73 @@ def classify_incident(incident_text: str) -> PropertyClassification:
 
 
 # ---------------------------------------------------------------------------
+# Case-study demo: run tag_incident (Listing 1.2) and classify_incident
+# (Listing 1.3) against the four chapter case studies. This is what section
+# 1.4 and 1.5.5 mean by "run the __main__ block on the four case studies."
+# ---------------------------------------------------------------------------
+
+_CASE_STUDY_INCIDENTS: dict[str, str] = {
+    "Case A: Moffatt v. Air Canada": (
+        "The airline's chatbot hallucinated a bereavement fare policy that did "
+        "not exist, confabulating a wrong procedure for a post-travel discount "
+        "claim. The customer acted on this false information and paid full "
+        "price, then was denied the discount. This wrong claim was never "
+        "covered in tests and the wrong policy reached the customer directly."
+    ),
+    "Case B: Microsoft Copilot EchoLeak": (
+        "Indirect injection reached Microsoft 365 Copilot through an "
+        "instruction from email. The model followed malicious instruction "
+        "embedded in the retrieved message: external content executed as "
+        "though it were a legitimate command, and content treated as command "
+        "bypassed safety controls, exfiltrating mailbox data across the trust "
+        "boundary. This is a textbook prompt injection case."
+    ),
+    "Case C: Document-processing agent": (
+        "The agent found an embedded command in the invoice comment field: an "
+        "instruction override told it to update vendor bank details, "
+        "contradicting the system prompt's original constraint. Because the "
+        "instruction override in the same context window took precedence, the "
+        "agent followed malicious instruction text as though it were a "
+        "legitimate command, executing an out-of-scope write to the vendor "
+        "master with no human review gate."
+    ),
+    "Case D: DeepSeek ClickHouse exposure": (
+        "The unauthenticated ClickHouse database was flagged by Wiz Research: "
+        "a compliance review outdated for a system that wasn't tested at this "
+        "scale once external-facing LLM workloads began writing conversation "
+        "log and chat history data into a store reachable on the public "
+        "internet. The exposure appeared after the platform grew past its "
+        "original operational footprint, and access behavior changed as the "
+        "dataset's sensitivity increased, exposing session logs beyond the "
+        "intended data tier."
+    ),
+}
+
+
+def classify_case_studies_demo() -> dict[str, tuple[IncidentTagResult, PropertyClassification]]:
+    """
+    Run Listing 1.2 (tag_incident) and Listing 1.3 (classify_incident) against
+    the four chapter case studies and print the results.
+
+    Expected primary property (section 1.5.5): Air Canada -> open_ended_output;
+    EchoLeak and the document agent -> instruction_following; DeepSeek ->
+    emergent_behavior (or open_ended_output, depending on framing).
+    """
+    results: dict[str, tuple[IncidentTagResult, PropertyClassification]] = {}
+    print("\n[case-study classification demo — Listings 1.2 and 1.3]")
+    for case_name, incident_text in _CASE_STUDY_INCIDENTS.items():
+        tag_result = tag_incident(incident_text)
+        property_result = classify_incident(incident_text)
+        results[case_name] = (tag_result, property_result)
+        print(f"\n{case_name}")
+        print(f"  tag_incident      -> {tag_result.primary_archetype} "
+              f"(confidence: {tag_result.confidence})")
+        print(f"  classify_incident -> {property_result.primary_property} "
+              f"(confidence: {property_result.confidence})")
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Listing 1.4: generate_exposure_map — post-deployment exposure map generator
 # Requirements: dataclasses (stdlib), typing (stdlib)
 # ---------------------------------------------------------------------------
@@ -1378,3 +1449,7 @@ class HardeningReadinessReport:
             _json.dump(self.to_dict(), fh, indent=2)
         print(f"[HardeningReadinessReport] Saved to: {path}")
         return path
+
+
+if __name__ == "__main__":
+    main()

@@ -393,15 +393,25 @@ class DualScanResult:
 def scan_reasoning_model_output(
     prompt: str,
     analyzer: Any,
-    budget_tokens: int = 5000,
+    max_tokens: int = 5000,
+    effort: str = "high",
 ) -> DualScanResult:
-    """Scan both the extended thinking trace and final answer for PII."""
+    """
+    Scan both the extended thinking trace and final answer for PII.
+
+    Claude Opus 4.7 and later reject the legacy manual-thinking shape
+    (thinking={"type": "enabled", "budget_tokens": N}) with a 400 error —
+    that API is only valid on Claude 4.6 and earlier. Opus 4.7+ requires
+    adaptive thinking instead, with depth controlled by output_config.effort
+    rather than a token budget.
+    """
     client = anthropic.Anthropic()
 
     response = client.messages.create(
         model="claude-opus-4-7",
-        max_tokens=budget_tokens,
-        thinking={"type": "enabled", "budget_tokens": budget_tokens - 1000},
+        max_tokens=max_tokens,
+        thinking={"type": "adaptive"},
+        output_config={"effort": effort},
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -544,13 +554,24 @@ def scan_o3_response(
         Model identifier. Use "o3" or "o4-mini" for reasoning models.
     reasoning_effort : str
         One of "low", "medium", "high". Controls the reasoning budget.
+
+    Note
+    ----
+    The "summary" key must be requested explicitly. Omitting it does not
+    raise an error — it silently returns no reasoning summary content at
+    all, so reasoning_pii and pii_in_reasoning_only would always be empty
+    and safe_to_log would always be True, even when the reasoning trace
+    contains PII. This may require organization verification per OpenAI's
+    policy for some reasoning models.
     """
     client = openai.OpenAI()  # reads OPENAI_API_KEY from environment
 
-    # Use the responses API to get access to reasoning content
+    # Use the responses API to get access to reasoning content.
+    # "summary" must be requested explicitly — omitting it returns no
+    # reasoning summary at all, with no error.
     response = client.responses.create(
         model=model,
-        reasoning={"effort": reasoning_effort},
+        reasoning={"effort": reasoning_effort, "summary": "auto"},
         input=[{"role": "user", "content": prompt}],
     )
 
@@ -617,7 +638,14 @@ def execute_right_to_erasure(
 ) -> ErasureResult:
     """
     Delete all vectors and source documents associated with a user.
-    Requires documents to be ingested with user_id metadata (see Ch 5).
+
+    Requires documents to be ingested with user_id metadata — a per-individual
+    identifier introduced in this chapter, distinct from the tenant_id
+    metadata tag chapter 5 uses for cross-tenant isolation between customer
+    organizations. tenant_id scopes queries to the right organization;
+    user_id scopes erasure to the right data subject within that
+    organization, which GDPR Article 17 requires and tenant_id alone
+    cannot provide.
     """
     index = pinecone_client.Index(index_name)
     vectors_deleted = 0

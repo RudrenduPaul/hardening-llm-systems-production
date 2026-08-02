@@ -1,6 +1,6 @@
 # Chapter 5: RAG and Retrieval Security — The Largest New Attack Surface
 
-Secure a Retrieval-Augmented Generation pipeline against namespace collision, cross-tenant data leakage, and adversarial poisoning — using per-tenant namespacing, cryptographic provenance tags, and statistical anomaly detection on retrieval patterns.
+Secure a Retrieval-Augmented Generation pipeline against namespace collision, cross-tenant data leakage, and adversarial poisoning — using per-tenant namespacing, embedding anomaly detection, and CUSUM statistical monitoring of retrieval patterns.
 
 ## Main chapter code
 
@@ -34,7 +34,6 @@ pip install "numpy>=1.26.0,<2.0" matplotlib pydantic>=2.0
 | Concept | Description |
 |---------|-------------|
 | Tenant namespace | Cryptographically derived index partition; namespace leakage is detectable, not just policy-blocked |
-| Provenance tag | HMAC signature on chunk metadata; detects poisoned documents inserted after ingest |
 | CUSUM | Cumulative sum control chart for sequential anomaly detection on score time series |
 
 ## Running locally

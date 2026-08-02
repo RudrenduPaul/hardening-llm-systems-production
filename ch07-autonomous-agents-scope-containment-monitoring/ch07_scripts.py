@@ -1560,7 +1560,7 @@ class InstrumentedAgent:
         with self._tracer.start_as_current_span("agent.plan") as span:
             span.set_attribute("gen_ai.agent.name", self.name)
             span.set_attribute("gen_ai.agent.goal", goal[:200])
-            span.set_attribute("gen_ai.system", "openai")
+            span.set_attribute("gen_ai.provider.name", "openai")
             start = time.time()
             plan = self.llm_client.plan(goal)
             span.set_attribute("gen_ai.agent.plan_steps", len(plan.split("\n")))

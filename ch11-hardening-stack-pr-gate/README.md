@@ -6,23 +6,23 @@ Assemble the six hardening layers built across Chapters 2–10 into a single PR-
 
 | File | Description |
 |------|-------------|
-| [`ch11_notebook.ipynb`](ch11_notebook.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch11-hardening-stack-pr-gate/ch11_notebook.ipynb) | Interactive notebook: run each layer of the hardening stack against a demo system, then the full ten-check PR gate |
+| [`ch11_notebook.ipynb`](ch11_notebook.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch11-hardening-stack-pr-gate/ch11_notebook.ipynb) | Interactive notebook: run each layer of the hardening stack against a demo system, then the full ten-check PR-gate |
 | [`ch11_scripts.py`](ch11_scripts.py) | `PRHardeningGate`, `CIHardeningOrchestrator`, `StackLatencyProfiler`, `StackLatencyBudget`, `RoutingPolicy`, reference-stack builders, `generate_migration_plan` |
 
 ## What this chapter builds
 
-- **`get_nemo_guardrails_app()`** (Listing 11.1) — FastAPI app wrapping NeMo Guardrails with the Colang config for jailbreak, off-topic, and PII-leakage rails
+- **`get_nemo_guardrails_app()`** (Listing 11.1b) — FastAPI app wrapping NeMo Guardrails with the Colang config for jailbreak, off-topic, and PII-leakage rails
 - **`build_guardrails_ai_rag_pipeline()` / `run_guardrails_ai_rag()`** (Listing 11.2) — Guardrails AI validator pipeline that enforces a JSON schema and re-asks on toxic or malformed RAG output
 - **`write_litellm_proxy_config()` / `get_litellm_client()` / `litellm_completion()`** (Listing 11.3) — LiteLLM proxy config and client with latency-based routing and fallback across three models
 - **`PresidioMiddleware`** — ASGI middleware that scrubs PII from request and response bodies using Microsoft Presidio before they reach the LLM or the client
-- **`setup_observability()` / `trace_llm_call()`** (Listing 11.5) — OpenTelemetry span + Langfuse generation wiring for every LLM call
+- **`setup_observability()` / `trace_llm_call()`** (Listing 11.4) — OpenTelemetry span + Langfuse generation wiring for every LLM call
 - **`CIHardeningOrchestrator`** — runs the deepeval suite and a Garak adversarial probe run, writes a combined `ci-hardening-report.json`
-- **`StackLatencyProfiler`** (Listing 11.7) — per-layer P50/P99 latency measurement across the six request-path layers
-- **`StackLatencyBudget`** (Listing 11.7b) — allocates a total P99 budget across layers and reports `ok` / `warning` / `over_budget` status per layer (section 11.6.1)
+- **`StackLatencyProfiler`** (Listing 11.5) — per-layer P50/P99 latency measurement across the six request-path layers
+- **`StackLatencyBudget`** (Listing 11.5b) — allocates a total P99 budget across layers and reports `ok` / `warning` / `over_budget` status per layer (section 11.6.1)
 - **`RoutingPolicy` / `DegradationMode`** — health- and cost-aware endpoint selection with automatic fallback and refusal modes
-- **`PRHardeningGate`** (Listing 11.8) — the ten merge-blocking checks from section 11.8; `run()` prints a pass/fail table and calls `sys.exit(1)` on any failure (or raises `RuntimeError` when `strict=False`)
-- **`build_hardened_chat_assistant()` / `build_hardened_rag_app()` / `build_hardened_agent()`** (Listings 11.13–11.15) — the three reference stacks: LangChain + NeMo Guardrails, LlamaIndex + Pinecone + Guardrails AI, LangGraph + MCP with tool allowlist and human approval gate
-- **`generate_migration_plan()` / `print_migration_plan()`** (Listing 11.15b) — sequenced, rollback-annotated migration steps for adding the stack to an existing LangChain, LlamaIndex, or LangGraph deployment
+- **`PRHardeningGate`** (Listing 11.9) — the ten merge-blocking checks from section 11.8; `run()` prints a pass/fail table and calls `sys.exit(1)` on any failure (or raises `RuntimeError` when `strict=False`)
+- **`build_hardened_chat_assistant()` / `build_hardened_rag_app()` / `build_hardened_agent()`** (Listings 11.6–11.8) — the three reference stacks: LangChain + NeMo Guardrails, LlamaIndex + Pinecone + Guardrails AI, LangGraph + MCP with tool allowlist and human approval gate
+- **`generate_migration_plan()` / `print_migration_plan()`** (Listing 11.8b) — sequenced, rollback-annotated migration steps for adding the stack to an existing LangChain, LlamaIndex, or LangGraph deployment
 
 ## Prerequisites
 

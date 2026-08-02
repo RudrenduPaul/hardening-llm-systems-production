@@ -460,6 +460,17 @@ class PresidioMiddleware:
         anonymized = self._anonymizer.anonymize(text=text, analyzer_results=results)
         return anonymized.text, detections
 
+    def _scrub_json_value(self, value: Any) -> Any:
+        """Recursively scrub every string leaf in a parsed JSON value."""
+        if isinstance(value, str):
+            scrubbed, _ = self.scrub(value)
+            return scrubbed
+        if isinstance(value, dict):
+            return {k: self._scrub_json_value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._scrub_json_value(v) for v in value]
+        return value
+
     async def __call__(self, scope: Dict, receive: "Any", send: "Any") -> None:
         """ASGI callable — scrubs request and response bodies."""
         if scope["type"] != "http":
@@ -485,7 +496,52 @@ class PresidioMiddleware:
                     pass
             return message
 
-        await self.app(scope, patched_receive, send)
+        # Intercept response body: buffer every http.response.body chunk
+        # (the ASGI server may split the body across several `send` calls
+        # via `more_body`), scrub the reassembled JSON payload once the
+        # final chunk arrives, then emit the deferred response.start with a
+        # corrected Content-Length and a single response.body message.
+        response_start: Optional[Dict] = None
+        response_body_parts: List[bytes] = []
+
+        async def patched_send(message: Dict) -> None:
+            nonlocal response_start
+            msg_type = message.get("type")
+
+            if msg_type == "http.response.start":
+                response_start = message
+                return
+
+            if msg_type == "http.response.body":
+                response_body_parts.append(message.get("body", b""))
+                if message.get("more_body", False):
+                    return
+
+                full_body = b"".join(response_body_parts)
+                try:
+                    payload = json.loads(full_body)
+                    scrubbed_payload = self._scrub_json_value(payload)
+                    full_body = json.dumps(scrubbed_payload).encode()
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass  # Non-JSON body (e.g. streaming text) passes through unscrubbed
+
+                if response_start is not None:
+                    headers = [
+                        (k, v) for k, v in response_start.get("headers", [])
+                        if k.lower() != b"content-length"
+                    ]
+                    headers.append((b"content-length", str(len(full_body)).encode()))
+                    start_message = dict(response_start)
+                    start_message["headers"] = headers
+                    await send(start_message)
+                    response_start = None
+
+                await send({"type": "http.response.body", "body": full_body, "more_body": False})
+                return
+
+            await send(message)
+
+        await self.app(scope, patched_receive, patched_send)
 
 
 # ---------------------------------------------------------------------------
@@ -561,28 +617,45 @@ def trace_llm_call(
     prompt: str,
     output: str,
     latency_ms: float,
+    session_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Record a single LLM call as an OpenTelemetry span and a Langfuse generation.
+
+    The span uses OTel GenAI semantic-convention attribute names where a
+    matching one exists (`gen_ai.system`, `gen_ai.request.model`); latency
+    and prompt/output size are recorded as `gen_ai.*`-namespaced extension
+    attributes since GenAI semconv has no dedicated field for them.
+
+    Pass `session_id` to tag both the span and the Langfuse generation with
+    a `session.id` value. When a user reports a bad response, pull their
+    session ID and search Langfuse for every trace carrying that value to
+    replay the conversation with guardrail decisions visible at each turn.
     """
     with tracer.start_as_current_span("llm.completion") as span:
-        span.set_attribute("llm.model", model)
-        span.set_attribute("llm.prompt_length", len(prompt))
-        span.set_attribute("llm.output_length", len(output))
-        span.set_attribute("llm.latency_ms", latency_ms)
+        span.set_attribute("gen_ai.system", "openai")
+        span.set_attribute("gen_ai.request.model", model)
+        span.set_attribute("gen_ai.prompt.length_chars", len(prompt))
+        span.set_attribute("gen_ai.completion.length_chars", len(output))
+        span.set_attribute("gen_ai.response.latency_ms", latency_ms)
+        if session_id:
+            span.set_attribute("session.id", session_id)
         if metadata:
             for k, v in metadata.items():
-                span.set_attribute(f"llm.{k}", str(v))
+                span.set_attribute(f"gen_ai.{k}", str(v))
 
     if langfuse_client:
         try:
+            gen_metadata = dict(metadata or {})
+            if session_id:
+                gen_metadata["session_id"] = session_id
             generation = langfuse_client.generation(
                 name="llm-completion",
                 model=model,
                 input=prompt,
                 output=output,
-                metadata=metadata or {},
+                metadata=gen_metadata,
                 usage={"latency_ms": latency_ms},
             )
             generation.end()
@@ -622,7 +695,7 @@ class CIHardeningOrchestrator:
         garak_max_fail_rate=0.05,
     )
     report = orchestrator.run(test_dataset_path=Path("evals/test-cases.json"))
-    # report["passed"] == False triggers sys.exit(1) in the PR gate
+    # report["passed"] == False triggers sys.exit(1) in the PR-gate
     """
 
     def __init__(
@@ -950,7 +1023,7 @@ class StackLatencyProfiler:
 
 
 # ---------------------------------------------------------------------------
-# 7b. StackLatencyBudget — per-layer budget allocation (section 11.6.1, Listing 11.7b)
+# 7b. StackLatencyBudget — per-layer budget allocation (section 11.6.1, Listing 11.5b)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -1783,7 +1856,13 @@ def rag_query(question: str) -> str:
 
 REFERENCE_STACK_AGENT_LANGGRAPH = """\
 # Reference stack: Agentic system with LangGraph + MCP
-# Requires: langgraph==0.2.0, langchain==0.3.0, nemoguardrails==0.9.0
+# Requires: langgraph==0.2.0, langchain==0.3.0
+#
+# NOTE: guardrails_node below is a lightweight keyword-substring check, not
+# a NeMo Guardrails integration -- it never imports or calls nemoguardrails.
+# For dialogue-aware, multi-turn scope enforcement, wire this node to
+# nemoguardrails==0.9.0 instead (see Listing 11.8 and build_hardened_agent()
+# in this file for the fuller MCP-allowlist + human-approval-gate version).
 
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
@@ -1797,7 +1876,8 @@ class AgentState(TypedDict):
 llm = ChatOpenAI(model="gpt-4o", temperature=0.0)
 
 def guardrails_node(state: AgentState) -> AgentState:
-    # NeMo Guardrails check on the latest user message
+    # Lightweight keyword-substring check on the latest user message.
+    # This is NOT a NeMo Guardrails call -- see the module note above.
     latest = state["messages"][-1]["content"]
     if any(kw in latest.lower() for kw in ["ignore all", "jailbreak", "dan mode"]):
         return {**state, "guardrails_triggered": True}
@@ -1826,7 +1906,7 @@ agent = graph.compile()
 
 # ---------------------------------------------------------------------------
 # 10b. HardenedChatAssistant, HardenedRAGApp, HardenedAgent
-#      (Listings 11.13, 11.14, 11.15 — section 11.7)
+#      (Listings 11.6, 11.7, 11.8 — section 11.7)
 # ---------------------------------------------------------------------------
 
 def build_hardened_chat_assistant(
@@ -1838,13 +1918,13 @@ def build_hardened_chat_assistant(
 ) -> "Any":
     """
     Builds a hardened LangChain chat assistant with NeMo Guardrails
-    (Listing 11.13). The Colang policies apply to the full conversation
+    (Listing 11.6). The Colang policies apply to the full conversation
     context, including the system prompt, because the system prompt is
     passed into the same message list NeMo evaluates.
 
     Pass a PresidioMiddleware instance to scrub PII from the user message
     and the reply before/after the NeMo call, matching the production
-    deployment described after Listing 11.13 (this listing shows the two
+    deployment described after Listing 11.6 (this listing shows the two
     layers separately; in deployed code both run in sequence).
 
     Requires: langchain==0.3.0, langchain-openai==0.2.0, nemoguardrails==0.9.0
@@ -1899,14 +1979,14 @@ def build_hardened_rag_app(
 ) -> "Any":
     """
     Builds a hardened LlamaIndex + Pinecone RAG application with tenant
-    isolation and output validation (Listing 11.14).
+    isolation and output validation (Listing 11.7).
 
     The `vector_store_kwargs={"filter": {"tenant_id": tenant_id}}` scopes
     every retrieval to the requesting tenant's namespace regardless of
     semantic similarity to other tenants' documents (chapter 5). When
     `max_document_age_days` is set, source nodes older than that threshold
     are dropped before the answer is returned (the source-freshness check
-    described after Listing 11.14).
+    described after Listing 11.7).
 
     Requires: llama-index==0.11.0, pinecone-client==4.1.0, guardrails-ai==0.5.0
     """
@@ -1990,7 +2070,7 @@ def build_hardened_agent(
     high_risk_tools: Optional[set] = None,
 ) -> "Any":
     """
-    Builds a LangGraph + MCP agent with three controls (Listing 11.15):
+    Builds a LangGraph + MCP agent with three controls (Listing 11.8):
       - MCP tool allowlist enforcement
       - Tool call rate limiting
       - Human approval gate for high-risk actions
@@ -1998,7 +2078,7 @@ def build_hardened_agent(
     Every rejected tool call is appended to `scope_violations` on the
     session state rather than silently failing, giving the security team
     visibility into what the agent tried to do but couldn't (see the prose
-    following Listing 11.15).
+    following Listing 11.8).
 
     Requires: langgraph==0.2.0, anthropic>=0.25.0
     """
@@ -2055,7 +2135,7 @@ def build_hardened_agent(
 
 # ---------------------------------------------------------------------------
 # 11. MigrationStep / generate_migration_plan
-#     (Listing 11.15b — section 11.7.4, migration path for existing deployments)
+#     (Listing 11.8b — section 11.7.4, migration path for existing deployments)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -2079,7 +2159,7 @@ MIGRATION_STEPS: Dict[str, List[MigrationStep]] = {
         ),
         MigrationStep(
             2, "pii", "Add Presidio output middleware to response handler",
-            1, "high", "gateway", "Remove process_response wrapper call",
+            1, "high", "gateway", "Remove the presidio_middleware.scrub() wrapper call",
             "PII detection rate metric",
         ),
         MigrationStep(
