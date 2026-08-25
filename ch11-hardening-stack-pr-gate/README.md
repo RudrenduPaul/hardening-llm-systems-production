@@ -29,13 +29,13 @@ Assemble the six hardening layers built across Chapters 2–10 into a single PR-
 ```bash
 pip install pyyaml
 # Optional, per layer (graceful fallback via stub results if missing):
-pip install nemoguardrails==0.9.0 guardrails-ai==0.5.0 litellm==1.35.0 \
-            opentelemetry-sdk==1.21.0 opentelemetry-exporter-otlp==1.21.0 \
-            langfuse==2.28.0 deepeval==0.21.7 garak==0.10.0 \
+pip install nemoguardrails==0.12.0 guardrails-ai==0.6.8 litellm==1.72.6 \
+            opentelemetry-sdk==1.24.0 opentelemetry-exporter-otlp==1.24.0 \
+            langfuse==2.28.0 deepeval==0.21.71 garak==0.11.0 \
             presidio-analyzer==2.2.354 presidio-anonymizer==2.2.354 \
-            langchain==0.3.0 langchain-openai==0.2.0 \
-            llama-index==0.11.0 pinecone-client==4.1.0 \
-            langgraph==0.2.0 fastapi>=0.110.0
+            langchain==0.3.27 langchain-openai==0.2.0 \
+            llama-index==0.14.24 pinecone-client==4.1.0 \
+            langgraph==0.2.22 fastapi>=0.110.0
 ```
 
 > **No API key required for the demo** — `python3 ch11_scripts.py` runs end-to-end against stub/synthetic data when an optional dependency (deepeval, Garak, Presidio, and so on) isn't installed. Set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `LANGFUSE_*` keys for live execution against a real model and Langfuse project.
