@@ -24,7 +24,7 @@ Wire the hallucination detection pipeline from Chapter 2 into a GitHub Actions C
 ## Prerequisites
 
 ```bash
-pip install openai deepeval==0.21.7 ragas==0.1.21 scikit-learn scipy pydantic
+pip install openai deepeval==0.21.71 ragas==0.2.15 scikit-learn scipy pydantic
 ```
 
 > **No API key required for the demos**: `SelfConsistencyChecker`, `ClaimDecompositionPipeline`, and `evaluate_prompt_version` fall back to mock/rule-based generators, and `HallucinationCheckGate` / `HallucinationCIGate` ship with a deterministic mock scorer, when `OPENAI_API_KEY` isn't set. `canary_window_sizing` requires `scipy`.
