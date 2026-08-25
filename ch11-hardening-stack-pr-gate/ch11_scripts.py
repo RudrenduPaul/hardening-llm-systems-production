@@ -21,13 +21,13 @@ Companion script covering:
   - MigrationStep / generate_migration_plan for existing-deployment migration (section 11.7.4)
 
 Pinned dependencies:
-  nemoguardrails==0.9.0
-  guardrails-ai==0.5.0
-  litellm==1.35.0
-  opentelemetry-sdk==1.21.0
+  nemoguardrails==0.12.0
+  guardrails-ai==0.6.8
+  litellm==1.72.6
+  opentelemetry-sdk==1.24.0
   langfuse==2.28.0
-  deepeval==0.21.7
-  garak==0.10.0
+  deepeval==0.21.71
+  garak==0.11.0
 """
 
 from __future__ import annotations
@@ -328,7 +328,7 @@ def write_litellm_proxy_config(path: Path) -> None:
 def get_litellm_client(base_url: str = "http://localhost:4000", api_key: str = ""):
     """
     Return a LiteLLM client pointed at the proxy.
-    Requires: litellm==1.35.0
+    Requires: litellm==1.72.6
     """
     try:
         import litellm
@@ -336,7 +336,7 @@ def get_litellm_client(base_url: str = "http://localhost:4000", api_key: str = "
         litellm.api_key = api_key or os.environ.get("LITELLM_MASTER_KEY", "sk-local-dev")
         return litellm
     except ImportError as exc:
-        raise ImportError("Install litellm==1.35.0") from exc
+        raise ImportError("Install litellm==1.72.6") from exc
 
 
 def litellm_completion(
@@ -713,7 +713,7 @@ class CIHardeningOrchestrator:
     def _run_deepeval(self, test_dataset_path: Path) -> EvalResult:
         """
         Run deepeval evaluation suite.
-        Requires: deepeval==0.21.7
+        Requires: deepeval==0.21.71
         """
         try:
             import deepeval
