@@ -7,10 +7,14 @@ on:
   push:
     branches: [main]
     paths:
-      - "companion-code/**"
+      - "ch*/**"
+      - "requirements.txt"
+      - ".github/workflows/test-notebooks.yml"
   pull_request:
     paths:
-      - "companion-code/**"
+      - "ch*/**"
+      - "requirements.txt"
+      - ".github/workflows/test-notebooks.yml"
 
 jobs:
   test:
@@ -21,10 +25,6 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11"]
-
-    defaults:
-      run:
-        working-directory: companion-code
 
     steps:
       - uses: actions/checkout@v4
