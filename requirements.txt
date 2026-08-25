@@ -5,7 +5,7 @@
 # Versioning: exact pins (==) for fast-breaking APIs; floor+ceiling (>=X,<X+1) for stable libs
 # Python: >=3.10, <3.13
 # Tested on: Python 3.10, 3.11
-# Last verified: 2026-05-31
+# Last verified: 2026-08-25 (full pip resolve confirmed on Python 3.11)
 #
 # Install: pip install -r requirements.txt
 # Spacy model: python -m spacy download en_core_web_lg
@@ -29,10 +29,10 @@
 # ============================================================
 # LLM Frameworks
 # ============================================================
-langchain==0.3.0
+langchain==0.3.27
 langchain-openai==0.2.0
-langgraph==0.2.0
-llama-index==0.11.0
+langgraph==0.2.22
+llama-index==0.14.24
 haystack-ai==2.3.0
 
 # ============================================================
@@ -45,17 +45,18 @@ anthropic>=0.29.0,<1.0
 # Vector Stores
 # ============================================================
 pinecone-client==4.1.0
-weaviate-client==4.5.0
+weaviate-client==4.23.0
 qdrant-client==1.9.0
+SQLAlchemy==2.0.28
 psycopg2-binary>=2.9.9,<3.0
 pgvector>=0.3.0,<1.0
 
 # ============================================================
 # Guardrails & Safety
 # ============================================================
-guardrails-ai==0.5.0
-nemoguardrails==0.9.0
-llm-guard==0.3.12
+guardrails-ai==0.6.8
+nemoguardrails==0.12.0
+llm-guard==0.3.15
 presidio-analyzer==2.2.354
 presidio-anonymizer==2.2.354
 spacy==3.7.4
@@ -63,24 +64,24 @@ spacy==3.7.4
 # ============================================================
 # Red-Teaming & Evaluation
 # ============================================================
-garak==0.10.0
-pyrit==0.6.0
+garak==0.11.0
+pyrit==0.7.0
 deepeval==0.21.71
-ragas==0.1.21
-datasets>=2.20.0,<3.0
+ragas==0.2.15
+datasets>=2.20.0,<4.0
 
 # ============================================================
 # Observability
 # ============================================================
 arize-phoenix==4.5.0
 langfuse==2.28.0
-opentelemetry-sdk==1.21.0
-opentelemetry-exporter-otlp==1.21.0
+opentelemetry-sdk==1.24.0
+opentelemetry-exporter-otlp==1.24.0
 
 # ============================================================
 # LLM Gateway / Routing
 # ============================================================
-litellm==1.38.11
+litellm==1.72.6
 portkey-ai==1.3.0
 
 # ============================================================
@@ -109,7 +110,7 @@ httpx>=0.27.0,<1.0
 pyyaml>=6.0.1,<7.0
 jinja2>=3.1.4,<4.0
 python-dotenv==1.0.1
-tenacity==8.3.0
+tenacity==8.2.3
 
 # ============================================================
 # Testing
