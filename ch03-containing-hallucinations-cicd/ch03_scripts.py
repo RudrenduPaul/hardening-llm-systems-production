@@ -21,8 +21,8 @@ Implements:
 
 Requirements:
     openai>=1.0.0,<2.0
-    deepeval==0.21.7
-    ragas==0.1.21
+    deepeval==0.21.71
+    ragas==0.2.15
     scikit-learn>=1.3.0,<2.0
     scipy>=1.11.0,<2.0
     pydantic==2.7.1        # optional — GateConfig falls back to a dataclass
@@ -1406,7 +1406,7 @@ jobs:
       - name: Install evaluation dependencies
         run: |
           pip install --upgrade pip
-          pip install deepeval==0.21.7 ragas==0.1.21 \\
+          pip install deepeval==0.21.71 ragas==0.2.15 \\
                       scikit-learn>=1.3.0 scipy>=1.11.0 openai>=1.0.0
 
       - name: Run hallucination gate
