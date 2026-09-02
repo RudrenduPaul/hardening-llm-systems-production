@@ -116,7 +116,7 @@ Outputs are saved in-place to the `.ipynb` files. GitHub renders cell outputs di
 
 ## Environment variables
 
-Copy `.env.example` to `.env` and fill in your credentials. See the file for a complete key list by chapter. Never commit your `.env` file; it's already excluded via `.gitignore`.
+Copy `.env.example` to `.env` and fill in your credentials. See the file for a complete key list by chapter. Never commit your `.env` file; it's excluded via `.gitignore`.
 
 The most commonly needed keys:
 

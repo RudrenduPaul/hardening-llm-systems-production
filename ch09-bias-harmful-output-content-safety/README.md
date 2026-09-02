@@ -15,14 +15,14 @@ key or network access required.
 
 ## What this chapter builds
 
-- **`CounterfactualBiasProbe`** (Listing 9.1) — counterfactual sentence-pair probing with a Welch t-test, sentiment gap, and word-count gap
-- **`OccupationalAssociationTest`** (Listing 9.2) — pronoun-vs-BLS-baseline occupational association test with a per-occupation bias coefficient
-- **`LLMBiasJudge`** (Listing 9.3) — three-run majority-vote LLM-as-judge with Cohen's kappa calibration against a human gold set
-- **`HarmfulOutputTaxonomy`** (Listing 9.4) — severity-scored taxonomy covering all six Table 9.1 output types, mapped to OWASP LLM06/LLM09, GDPR Article 9/22, and EU AI Act Annex III/Article 52 liability
-- **NeMo Guardrails rails builder** (Listing 9.5) — Colang conversation-flow policy + `check_hate_speech` action wired to the OpenAI moderation endpoint
-- **Guardrails AI validator chain** (Listing 9.6) — `ToxicLanguage` + `DetectPII` validators with reask logic
-- **`HarmfulContentSLO`** (Listing 9.7) — three-tier degradation ladder (block list, ML classifier, LLM judge) with P99 latency budgets and per-severity fail-safe/fail-open dispatch
-- **`HarmfulContentCIGate`** (Listing 9.8) — unified release gate blocking on harmful fraction, counterfactual bias gap, occupational bias coefficient, and judge calibration kappa
+- **`CounterfactualBiasProbe`** (Listing 9.1): counterfactual sentence-pair probing with a Welch t-test, sentiment gap, and word-count gap
+- **`OccupationalAssociationTest`** (Listing 9.2): pronoun-vs-BLS-baseline occupational association test with a per-occupation bias coefficient
+- **`LLMBiasJudge`** (Listing 9.3): three-run majority-vote LLM-as-judge with Cohen's kappa calibration against a human gold set
+- **`HarmfulOutputTaxonomy`** (Listing 9.4): severity-scored taxonomy covering all six Table 9.1 output types, mapped to OWASP LLM06/LLM09, GDPR Article 9/22, and EU AI Act Annex III/Article 52 liability
+- **NeMo Guardrails rails builder** (Listing 9.5): Colang conversation-flow policy + `check_hate_speech` action wired to the OpenAI moderation endpoint
+- **Guardrails AI validator chain** (Listing 9.6): `ToxicLanguage` + `DetectPII` validators with reask logic
+- **`HarmfulContentSLO`** (Listing 9.7): three-tier degradation ladder (block list, ML classifier, LLM judge) with P99 latency budgets and per-severity fail-safe/fail-open dispatch
+- **`HarmfulContentCIGate`** (Listing 9.8): unified release gate blocking on harmful fraction, counterfactual bias gap, occupational bias coefficient, and judge calibration kappa
 
 ## Prerequisites
 

@@ -573,14 +573,14 @@ Use this checklist when deploying or integrating a Model Context Protocol (MCP) 
 
 ## C.11 Complete requirements.txt for the companion repository
 
-This is a verbatim copy of `requirements.txt` at the repository root. It stays in sync with the real file automatically: the weekly CI freshness workflow (`.github/workflows/test-notebooks.yml`) diffs this block against `requirements.txt` and fails the build if they drift.
+This is a verbatim copy of `requirements.txt` at the repository root. It stays in sync automatically: the weekly CI freshness workflow (`.github/workflows/test-notebooks.yml`) diffs this block against `requirements.txt` and fails the build if they drift.
 
 ```
 # ============================================================
-# Hardening LLM Systems in Production — Companion Code
+# Hardening LLM Systems in Production: Companion Code
 # Manning Books | Authors: Rudrendu Paul, Sourav Nandy
 #
-# Versioning: exact pins (==) for fast-breaking APIs; floor+ceiling (>=X,<X+1) for stable libs
+# Versioning: pinned versions (==) for fast-breaking APIs; floor+ceiling (>=X,<X+1) for stable libs
 # Python: >=3.10, <3.13
 # Tested on: Python 3.10, 3.11
 # Last verified: 2026-05-31

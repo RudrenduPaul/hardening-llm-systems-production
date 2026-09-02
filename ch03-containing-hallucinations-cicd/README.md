@@ -35,7 +35,7 @@ pip install openai deepeval==0.21.71 ragas==0.2.15 scikit-learn scipy pydantic
 |---------|-------------|
 | Re-run policy | Absorbs LLM-as-judge flakiness: a single failing run doesn't block the merge on its own (section 3.7.2) |
 | Baseline drift detection | Flags a model/provider version change as a recalibration prompt, not a PR rejection (section 3.7.3) |
-| Shadow traffic | Compares a candidate guardrail configuration against production on real, already-logged traffic before any user sees its output (section 3.6) |
+| Shadow traffic | Compares a candidate guardrail configuration against production on logged traffic before any user sees its output (section 3.6) |
 
 ## Running locally
 
