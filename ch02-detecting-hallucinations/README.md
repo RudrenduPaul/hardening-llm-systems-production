@@ -11,12 +11,12 @@ Build a production hallucination detection pipeline that combines deepeval's `Ha
 
 ## What this chapter builds
 
-- **HallucinationMetric** — thin wrapper around deepeval with normalized interface
-- **RAGASPipeline** — sentence-level claim decomposition and entailment checking
-- **CombinedHallucinationScorer** — ensemble averaging with configurable weights
-- **Inter-rater reliability** — Cohen's kappa validates metric agreement before deploying
-- **Statistical power analysis** — minimum sample size calculator for hallucination regression suites
-- **Score distribution visualization** — histogram + violin plots for production dashboards
+- **HallucinationMetric**: thin wrapper around deepeval with normalized interface
+- **RAGASPipeline**: sentence-level claim decomposition and entailment checking
+- **CombinedHallucinationScorer**: ensemble averaging with configurable weights
+- **Inter-rater reliability**: Cohen's kappa validates metric agreement before deploying
+- **Statistical power analysis**: minimum sample size calculator for hallucination regression suites
+- **Score distribution visualization**: histogram + violin plots for production dashboards
 
 ## Prerequisites
 
@@ -24,14 +24,14 @@ Build a production hallucination detection pipeline that combines deepeval's `Ha
 pip install deepeval ragas scikit-learn scipy
 ```
 
-> **No API key required for the notebook demo** — all examples use mock scorers that simulate realistic score distributions.
+> **No API key required for the notebook demo**: all examples use mock scorers that simulate realistic score distributions.
 
 ## Key concepts
 
 | Concept | Description |
 |---------|-------------|
 | Faithfulness | Does the output contain only claims supported by the retrieved context? |
-| Answer relevancy | Does the output address the user's actual question? |
+| Answer relevancy | Does the output address the user's question? |
 | Cohen's kappa | Agreement statistic for validating that two metrics agree beyond chance |
 | Power analysis | How many test cases you need to detect a 5-point drop in faithfulness |
 
