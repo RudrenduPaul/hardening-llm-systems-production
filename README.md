@@ -33,19 +33,19 @@ All library versions in `requirements.txt` are pinned with `==` for full reprodu
 
 ## Table of contents
 
-| Chapter | Notebook | Key scripts | Main topic |
-|---------|----------|-------------|------------|
-| [Ch 1: What Breaks After You Ship](ch01-what-breaks-after-you-ship/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch01-what-breaks-after-you-ship/ch01_notebook.ipynb) | [ch01_scripts.py](ch01-what-breaks-after-you-ship/ch01_scripts.py) | Self-diagnostic hardening scorecard + threat model vocabulary |
-| [Ch 2: Detecting Hallucinations](ch02-detecting-hallucinations/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch02-detecting-hallucinations/ch02_notebook.ipynb) | [ch02_scripts.py](ch02-detecting-hallucinations/ch02_scripts.py) | deepeval + RAGAS hallucination detection pipeline |
-| [Ch 3: Containing Hallucinations via CI/CD](ch03-containing-hallucinations-cicd/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch03-containing-hallucinations-cicd/ch03_notebook.ipynb) | [ch03_scripts.py](ch03-containing-hallucinations-cicd/ch03_scripts.py) | CI/CD hallucination gate with GitHub Actions |
-| [Ch 4: Prompt Injection Defense](ch04-prompt-injection-defense/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch04-prompt-injection-defense/ch04_notebook.ipynb) | [ch04_scripts.py](ch04-prompt-injection-defense/ch04_scripts.py) | Defense-in-depth injection architecture |
-| [Ch 5: RAG and Retrieval Security](ch05-rag-retrieval-security/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch05-rag-retrieval-security/ch05_notebook.ipynb) | [ch05_scripts.py](ch05-rag-retrieval-security/ch05_scripts.py) | Per-tenant RAG authorization + retrieval anomaly detection |
-| [Ch 6: Red-Teaming: Automated Validation](ch06-red-teaming/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch06-red-teaming/ch06_notebook.ipynb) | [ch06_scripts.py](ch06-red-teaming/ch06_scripts.py) | Garak + PyRIT + Promptfoo CI scanning + reasoning-model trace testing |
-| [Ch 7: Autonomous Agents: Scope, Containment, Monitoring](ch07-autonomous-agents-scope-containment-monitoring/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch07-autonomous-agents-scope-containment-monitoring/ch07_notebook.ipynb) | [ch07_scripts.py](ch07-autonomous-agents-scope-containment-monitoring/ch07_scripts.py) | MCP allowlists, sandboxed execution, tripwires, memory-poisoning defenses |
-| [Ch 8: PII, Memorization, and Right-to-Erasure](ch08-pii-memorization-right-to-erasure/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch08-pii-memorization-right-to-erasure/ch08_notebook.ipynb) | [ch08_scripts.py](ch08-pii-memorization-right-to-erasure/ch08_scripts.py) | Presidio PII pipeline + memorization extraction defense + right-to-erasure |
-| [Ch 9: Bias, Harmful Output, and Content Safety](ch09-bias-harmful-output-content-safety/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch09-bias-harmful-output-content-safety/ch09_notebook.ipynb) | [ch09_scripts.py](ch09-bias-harmful-output-content-safety/ch09_scripts.py) | Runtime content classification + counterfactual bias detection |
-| [Ch 10: EU AI Act and NIST: Engineering Artifacts](ch10-eu-ai-act-nist-engineering-artifacts/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch10-eu-ai-act-nist-engineering-artifacts/ch10_notebook.ipynb) | [ch10_scripts.py](ch10-eu-ai-act-nist-engineering-artifacts/ch10_scripts.py) | Annex IV documentation generator + 15-day incident-response pipeline |
-| [Ch 11: The Hardening Stack: PR-Gate](ch11-hardening-stack-pr-gate/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RudrenduPaul/hardening-llm-systems-production/blob/main/companion-code/ch11-hardening-stack-pr-gate/ch11_notebook.ipynb) | [ch11_scripts.py](ch11-hardening-stack-pr-gate/ch11_scripts.py) | Seven-layer hardening stack + Garak/PyRIT/Promptfoo CI scanning |
+| Chapter | Notebook | Main topic |
+|---------|----------|------------|
+| [Ch 1: What Breaks After You Ship](ch01-what-breaks-after-you-ship/) | [ch01_notebook.ipynb](ch01-what-breaks-after-you-ship/ch01_notebook.ipynb) | Self-diagnostic hardening scorecard + threat model vocabulary |
+| [Ch 2: Detecting Hallucinations](ch02-detecting-hallucinations/) | [ch02_notebook.ipynb](ch02-detecting-hallucinations/ch02_notebook.ipynb) | deepeval + RAGAS hallucination detection pipeline |
+| [Ch 3: Containing Hallucinations via CI/CD](ch03-containing-hallucinations-cicd/) | [ch03_notebook.ipynb](ch03-containing-hallucinations-cicd/ch03_notebook.ipynb) | CI/CD hallucination gate with GitHub Actions |
+| [Ch 4: Prompt Injection Defense](ch04-prompt-injection-defense/) | [ch04_notebook.ipynb](ch04-prompt-injection-defense/ch04_notebook.ipynb) | Defense-in-depth injection architecture |
+| [Ch 5: RAG and Retrieval Security](ch05-rag-retrieval-security/) | [ch05_notebook.ipynb](ch05-rag-retrieval-security/ch05_notebook.ipynb) | Per-tenant RAG authorization + retrieval anomaly detection |
+| [Ch 6: Red-Teaming: Automated Validation](ch06-red-teaming/) | [ch06_notebook.ipynb](ch06-red-teaming/ch06_notebook.ipynb) | Garak + PyRIT + Promptfoo CI scanning + reasoning-model trace testing |
+| [Ch 7: Autonomous Agents: Scope, Containment, Monitoring](ch07-autonomous-agents-scope-containment-monitoring/) | [ch07_notebook.ipynb](ch07-autonomous-agents-scope-containment-monitoring/ch07_notebook.ipynb) | MCP allowlists, sandboxed execution, tripwires, memory-poisoning defenses |
+| [Ch 8: PII, Memorization, and Right-to-Erasure](ch08-pii-memorization-right-to-erasure/) | [ch08_notebook.ipynb](ch08-pii-memorization-right-to-erasure/ch08_notebook.ipynb) | Presidio PII pipeline + memorization extraction defense + right-to-erasure |
+| [Ch 9: Bias, Harmful Output, and Content Safety](ch09-bias-harmful-output-content-safety/) | [ch09_notebook.ipynb](ch09-bias-harmful-output-content-safety/ch09_notebook.ipynb) | Runtime content classification + counterfactual bias detection |
+| [Ch 10: EU AI Act and NIST: Engineering Artifacts](ch10-eu-ai-act-nist-engineering-artifacts/) | [ch10_notebook.ipynb](ch10-eu-ai-act-nist-engineering-artifacts/ch10_notebook.ipynb) | Annex IV documentation generator + 15-day incident-response pipeline |
+| [Ch 11: The Hardening Stack: PR-Gate](ch11-hardening-stack-pr-gate/) | [ch11_notebook.ipynb](ch11-hardening-stack-pr-gate/ch11_notebook.ipynb) | Seven-layer hardening stack + Garak/PyRIT/Promptfoo CI scanning |
 
 ---
 
@@ -110,7 +110,7 @@ python3 execute_notebooks.py
 python3 execute_notebooks.py ch01 ch04 ch10
 ```
 
-Outputs are saved in-place to the `.ipynb` files. GitHub renders cell outputs directly in the browser. Colab users can re-run any cell to reproduce the output.
+Outputs are saved in-place to the `.ipynb` files. GitHub renders cell outputs directly in the browser.
 
 ---
 
