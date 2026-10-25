@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -52,7 +54,7 @@ def run_garak_scan(
     model_type: str,
     model_name: str,
     probes: list[str],
-    output_dir: str = "/tmp/garak-reports",
+    output_dir: Optional[str] = None,
 ) -> GarakScanReport:
     """
     Launch a Garak scan via subprocess and parse the resulting JSONL report.
@@ -66,6 +68,8 @@ def run_garak_scan(
     Requires: pip install garak==0.10.0
     """
     scan_id = str(uuid.uuid4())[:8]
+    if output_dir is None:
+        output_dir = tempfile.mkdtemp(prefix="garak-reports-")
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     report_path = f"{output_dir}/garak_{scan_id}.report.jsonl"
 
@@ -343,10 +347,13 @@ def generate_promptfoo_config(
     model: str,
     description: str,
     num_tests: int = 25,
-    output_path: str = "/tmp/promptfoo-results.json",
-    config_path: str = "/tmp/promptfoo-redteam.yaml",
+    output_path: Optional[str] = None,
+    config_path: Optional[str] = None,
 ) -> str:
     """Write a promptfoo red-team YAML config and return the config path."""
+    work_dir = tempfile.mkdtemp(prefix="promptfoo-")
+    output_path = output_path or os.path.join(work_dir, "results.json")
+    config_path = config_path or os.path.join(work_dir, "redteam.yaml")
     content = PROMPTFOO_CONFIG_TEMPLATE.format(
         model=model,
         description=description,
@@ -1272,7 +1279,7 @@ if __name__ == "__main__":
                 examples=[],
             ),
         ],
-        raw_report_path="/tmp/garak_demo.jsonl",
+        raw_report_path=os.path.join(tempfile.gettempdir(), "garak_demo.jsonl"),
     )
 
     # 2. Simulate a PyRIT PAIR result

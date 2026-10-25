@@ -333,7 +333,12 @@ def get_litellm_client(base_url: str = "http://localhost:4000", api_key: str = "
     try:
         import litellm
         litellm.api_base = base_url
-        litellm.api_key = api_key or os.environ.get("LITELLM_MASTER_KEY", "sk-local-dev")
+        resolved_key = api_key or os.environ.get("LITELLM_MASTER_KEY", "")
+        if not resolved_key:
+            raise ValueError(
+                "Provide api_key or set LITELLM_MASTER_KEY; no default key is used."
+            )
+        litellm.api_key = resolved_key
         return litellm
     except ImportError as exc:
         raise ImportError("Install litellm==1.72.6") from exc

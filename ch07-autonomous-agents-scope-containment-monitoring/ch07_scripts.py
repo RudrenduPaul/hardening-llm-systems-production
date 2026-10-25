@@ -34,6 +34,7 @@ import logging
 import os
 import re
 import resource
+import shutil
 import subprocess
 import sys
 import time
@@ -562,6 +563,9 @@ class ConfirmationGate:
 # Listing 7.6: Sandboxed tool executor using subprocess isolation
 # ===========================================================================
 
+_SANDBOX_PATH = "/usr/bin:/bin"
+
+
 @dataclass
 class SandboxResult:
     returncode: int
@@ -581,7 +585,7 @@ def _apply_resource_limits(
     # Address space
     mem_bytes = max_memory_mb * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-    # No new files (prevents exfiltration via /proc tricks)
+    # Cap open file descriptors (does NOT block network or filesystem access)
     resource.setrlimit(resource.RLIMIT_NOFILE, (16, 16))
 
 
@@ -592,6 +596,11 @@ class SandboxedSubprocessExecutor:
     Hard limits prevent runaway agents from consuming unbounded CPU, memory,
     or file descriptors.  stdout/stderr are captured; the process is killed
     if it exceeds the wall-clock timeout.
+
+    Limitations: rlimits bound CPU, memory, and file descriptors only. They do
+    not isolate the filesystem, network, or syscalls. For untrusted code add a
+    container, seccomp profile, or separate user namespace. POSIX-only, and
+    preexec_fn is unsafe in multi-threaded parents.
     """
 
     def __init__(
@@ -609,7 +618,15 @@ class SandboxedSubprocessExecutor:
     def _check_allowed(self, cmd: List[str]) -> None:
         if self._allowed is None:
             return
-        binary = os.path.basename(cmd[0])
+        if not cmd:
+            raise PermissionError("Empty command.")
+        # Resolve via the sandbox PATH so /tmp/evil/ls cannot pass as `ls`.
+        resolved = shutil.which(cmd[0], path=_SANDBOX_PATH)
+        if resolved is None or os.path.dirname(resolved) not in _SANDBOX_PATH.split(":"):
+            raise PermissionError(
+                f"Command '{cmd[0]}' does not resolve to a trusted system directory."
+            )
+        binary = os.path.basename(resolved)
         if binary not in self._allowed:
             raise PermissionError(
                 f"Command '{binary}' is not on the allowed-commands list."
@@ -618,7 +635,7 @@ class SandboxedSubprocessExecutor:
     def run(self, cmd: List[str], env: Optional[Dict[str, str]] = None) -> SandboxResult:
         """Run cmd in a sandboxed subprocess and return SandboxResult."""
         self._check_allowed(cmd)
-        safe_env = {"PATH": "/usr/bin:/bin", **(env or {})}
+        safe_env = {**(env or {}), "PATH": _SANDBOX_PATH}
         try:
             proc = subprocess.run(
                 cmd,

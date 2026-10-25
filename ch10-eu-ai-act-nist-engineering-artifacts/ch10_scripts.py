@@ -345,6 +345,17 @@ def _provenance_payload(record: "ProvenanceRecord") -> Dict[str, Any]:
     }
 
 
+def _load_signing_key() -> bytes:
+    """Read PROVENANCE_SIGNING_KEY; fail closed instead of using a guessable default."""
+    key = os.environ.get("PROVENANCE_SIGNING_KEY", "")
+    if len(key) < 32 or key == "change-me-to-a-random-32-char-string":
+        raise RuntimeError(
+            "PROVENANCE_SIGNING_KEY must be set to a random string of at least 32 "
+            "characters (e.g. `python -c \"import secrets; print(secrets.token_hex(32))\"`)."
+        )
+    return key.encode()
+
+
 def create_provenance_record(
     model_id: str,
     model_version: str,
@@ -357,7 +368,7 @@ def create_provenance_record(
 ) -> ProvenanceRecord:
     """Creates a cryptographically signed provenance record for a model output."""
     if signing_key is None:
-        signing_key = os.environ.get("PROVENANCE_SIGNING_KEY", "dev-key").encode()
+        signing_key = _load_signing_key()
 
     import uuid
 
@@ -381,7 +392,7 @@ def create_provenance_record(
 def verify_provenance_record(record: ProvenanceRecord, signing_key: bytes = None) -> bool:
     """Recomputes the HMAC-SHA256 signature and compares it to the stored one."""
     if signing_key is None:
-        signing_key = os.environ.get("PROVENANCE_SIGNING_KEY", "dev-key").encode()
+        signing_key = _load_signing_key()
     canonical = json.dumps(_provenance_payload(record), sort_keys=True)
     expected = hmac.new(signing_key, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, record.signature)
